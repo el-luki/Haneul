@@ -1,0 +1,21 @@
+name: Sync calendar to bot
+
+on:
+  # Started by the bot (Cloudflare) every hour from 5:00 to 22:00, because
+  # GitHub's own schedule can run hours late. "Run workflow" syncs right away.
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -r telegram-calendar-bot/requirements.txt
+      - run: python telegram-calendar-bot/sync_schedule.py
+        env:
+          GOOGLE_CALENDAR_ICS_URL: ${{ secrets.GOOGLE_CALENDAR_ICS_URL }}
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          WORKER_SECRET: ${{ secrets.WORKER_SECRET }}

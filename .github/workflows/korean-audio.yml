@@ -1,0 +1,38 @@
+name: Korean pronunciation audio
+
+on:
+  # Started by the bot after each Korean lesson (or with /korean audio).
+  workflow_dispatch:
+    inputs:
+      speak:
+        description: "Korean text to read aloud"
+        required: true
+      caption:
+        description: "Caption for the voice message"
+        required: false
+        default: "🔊 Listen and repeat"
+
+jobs:
+  audio:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Make sure ffmpeg is installed
+        run: |
+          command -v ffmpeg || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
+      - name: Make the voice message
+        run: |
+          python telegram-calendar-bot/korean_audio.py
+        env:
+          # inputs go through env variables (never pasted into the shell), so no text can break the command
+          SPEAK: ${{ inputs.speak }}
+          CAPTION: ${{ inputs.caption }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # the voice goes through the bot, so it also shows up in the Haneul app
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          WORKER_SECRET: ${{ secrets.WORKER_SECRET }}

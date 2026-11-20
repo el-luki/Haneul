@@ -1,0 +1,80 @@
+name = "haneul"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Free key-value storage for to-dos, waiting photos and chat memory
+[[kv_namespaces]]
+binding = "DB"
+id = "YOUR-KV-NAMESPACE-ID"
+
+# Reminder check every 5 minutes (free plan allows this).
+[triggers]
+crons = ["*/5 * * * *"]
+
+# Background jobs: Telegram gives up after ~60 seconds, but reading photos with
+# Gemini can take longer. So the webhook just drops each message in this queue
+# and answers Telegram straight away; the queue handler does the slow work.
+[[queues.producers]]
+queue = "admin-bot-jobs"
+binding = "JOBS"
+
+[[queues.consumers]]
+queue = "admin-bot-jobs"
+max_batch_size = 1
+max_batch_timeout = 0
+max_retries = 0
+max_concurrency = 1
+
+# WhatsApp notifications are collected for up to 30 seconds (or 25 messages) and
+# judged by Gemini in ONE call, so busy group chats don't use up the free quota.
+[[queues.producers]]
+queue = "admin-bot-whatsapp"
+binding = "WA_JOBS"
+
+[[queues.consumers]]
+queue = "admin-bot-whatsapp"
+max_batch_size = 25
+max_batch_timeout = 30
+max_retries = 0
+max_concurrency = 1
+
+[vars]
+PUBLIC_URL = "https://haneul.YOUR-SUBDOMAIN.workers.dev"
+GITHUB_REPO = "your-github-user/haneul" # the bot starts the brief + sync jobs here (needs GITHUB_TOKEN secret)
+
+# Secrets (set with "npx wrangler secret put", never written here):
+#   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, GEMINI_API_KEY, WORKER_SECRET
+
+# Slack notifications (forwarded by MacroDroid) are collected in batches of up to
+# 50 or 60 seconds, so a busy day costs only a few database writes.
+[[queues.producers]]
+queue = "admin-bot-slack"
+binding = "SLACK_JOBS"
+
+[[queues.consumers]]
+queue = "admin-bot-slack"
+max_batch_size = 50
+max_batch_timeout = 60
+max_retries = 0
+max_concurrency = 1
+
+# Background work (Notion sync, Velocity, Slack digest, music, check-ins, workouts…) has its
+# own queue, so a slow job never makes Haneul slow to answer Telegram messages.
+[[queues.producers]]
+queue = "admin-bot-background"
+binding = "BG_JOBS"
+
+[[queues.consumers]]
+queue = "admin-bot-background"
+max_batch_size = 1
+max_batch_timeout = 0
+max_retries = 0
+max_concurrency = 3
+
+# The Haneul app's message feed (everything Haneul and Alex said, in Telegram and the app)
+# and push-notification subscriptions. D1 free tier: 100k writes/day (KV allows only 1000).
+[[d1_databases]]
+binding = "FEED"
+database_name = "haneul"
+database_id = "YOUR-D1-DATABASE-ID"
