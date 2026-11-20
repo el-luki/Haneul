@@ -1,0 +1,47 @@
+name: Weekly backup
+
+on:
+  # Started by the bot (Cloudflare) every Sunday at 4:00, or with /backup.
+  workflow_dispatch:
+
+permissions:
+  contents: write # to push to the "backups" branch
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Download the bot's data
+        env:
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          WORKER_SECRET: ${{ secrets.WORKER_SECRET }}
+        run: |
+          curl -sf -H "Authorization: Bearer $WORKER_SECRET" "$WORKER_URL/backup" -o /tmp/latest.json
+          python3 -c "import json; d = json.load(open('/tmp/latest.json')); print('keys backed up:', ', '.join(d['data']))"
+          python3 telegram-calendar-bot/backup_tables.py /tmp/latest.json
+      - name: Save it to the "backups" branch (main is never touched)
+        run: |
+          git config user.name "haneul"
+          git config user.email "haneul-bot@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin backups > /dev/null; then
+            git checkout -B backups origin/backups
+          else
+            git checkout --orphan backups
+            git rm -rf --quiet .
+          fi
+          mkdir -p backups
+          cp /tmp/latest.json backups/latest.json
+          cp /tmp/latest.json "backups/$(date +%F).json"
+          ls -1 backups/20*.json | sort | head -n -12 | xargs -r git rm --quiet # keep the last 12 weekly copies
+          git add backups
+          git commit --quiet -m "Backup $(date +%F)" || echo "No changes since the last backup"
+          git push --quiet origin backups
+      - name: Tell the bot it's done
+        env:
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          WORKER_SECRET: ${{ secrets.WORKER_SECRET }}
+        run: |
+          curl -sf -X POST -H "Authorization: Bearer $WORKER_SECRET" "$WORKER_URL/heartbeat?job=backup"

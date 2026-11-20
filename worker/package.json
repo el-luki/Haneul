@@ -1,0 +1,13 @@
+{
+  "name": "haneul",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "test": "node test/run.js"
+  },
+  "devDependencies": {
+    "wrangler": "^4",
+    "yaml": "^2"
+  }
+}
