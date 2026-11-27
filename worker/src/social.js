@@ -2,6 +2,8 @@ import { MODELS_SMART } from "./config.js";
 import { addDaysISO, localWeekday, todayISO } from "./dates.js";
 import { gemini, parseJson } from "./gemini.js";
 import { workText } from "./work.js";
+import { postTweet } from "./xpost.js";
+import { postLinkedIn } from "./lipost.js";
 
 // ---------- LinkedIn + X: a daily post draft, a weekly article outline ----------
 // Jordan's advice (1-1, Nov 18): "If I don't put myself out there, I don't exist." LinkedIn is his home
@@ -52,7 +54,7 @@ navigation & control and propulsion). He wants to be visible to aerospace people
 
 Today's angle: ${format}.
 His real work (use only these facts; never invent results, numbers, internships or awards):
-${work || "- (his work list is empty: keep it about what he's learning)"}
+${work || "- LanderSim: a fuel-optimal rocket-landing simulator (G-FOLD, CVXPY)\n- Learn article on Medium: Why Landing a Rocket Is a Math Problem"}
 Recent space news he read: ${news.join(" | ") || "(none)"}.
 Ideas used lately (don't repeat): ${recent.join(" | ") || "(none)"}.
 
@@ -79,6 +81,52 @@ export async function markPosted(env, { net, text, date } = {}) {
   return { ok: true, streak: socialStreak(s) };
 }
 
+// Alex tapped "Approve & post on X" (and confirmed): the ONLY way Haneul posts anything.
+export async function approveX(env, { text } = {}) {
+  const s = await getSocial(env);
+  const d = todayISO();
+  const day = (s.days[d] ||= { idea: "", linkedin: "", x: "", posted: {} });
+  if (day.posted?.x) return { error: "today's X post is already up" + (day.xUrl ? `: ${day.xUrl}` : "") };
+  const body = String(text ?? day.x ?? "").trim();
+  const r = await postTweet(env, body).catch((err) => ({ error: err.message, noCredits: !!err.noCredits }));
+  if (r.noCredits) await env.DB.put("x_mode", "share"); // stays on the free share page until he re-enables the API
+  if (r.error) return r;
+  day.x = body;
+  day.posted = { ...(day.posted || {}), x: true };
+  day.xUrl = r.url;
+  await saveSocial(env, s);
+  return { ok: true, url: r.url, streak: socialStreak(s, d, "x") };
+}
+
+// Alex tapped "Approve & post on LinkedIn" (and confirmed).
+export async function approveLinkedIn(env, { text } = {}) {
+  const s = await getSocial(env);
+  const d = todayISO();
+  const day = (s.days[d] ||= { idea: "", linkedin: "", x: "", posted: {} });
+  if (day.posted?.linkedin) return { error: "today's LinkedIn post is already up" + (day.liUrl ? `: ${day.liUrl}` : "") };
+  const body = String(text ?? day.linkedin ?? "").trim();
+  const r = await postLinkedIn(env, body).catch((err) => ({ error: err.message }));
+  if (r.error) return r;
+  day.linkedin = body;
+  day.posted = { ...(day.posted || {}), linkedin: true };
+  day.liUrl = r.url;
+  await saveSocial(env, s);
+  return { ok: true, url: r.url, streak: socialStreak(s, d) };
+}
+
+// "Didn't show up? Send again": the automation accepted it but nothing appeared (scenario off, a field
+// not mapped…). Reopens today's draft so it can be approved again.
+export async function unmarkPosted(env, { net }) {
+  if (!["linkedin", "x"].includes(net)) return { error: "which network?" };
+  const s = await getSocial(env);
+  const day = s.days[todayISO()];
+  if (!day?.posted?.[net]) return { ok: true };
+  day.posted = { ...day.posted, [net]: false };
+  if (net === "linkedin") delete day.liUrl; else delete day.xUrl;
+  await saveSocial(env, s);
+  return { ok: true };
+}
+
 export async function saveSocialText(env, { net, text }) {
   const s = await getSocial(env);
   const day = s.days[todayISO()];
@@ -88,24 +136,12 @@ export async function saveSocialText(env, { net, text }) {
   return { ok: true };
 }
 
-// Weekly article (Sunday 15:00): a topic + Learn -> Build -> Iterate style outline from his real work.
-export async function weeklyArticle(env, haneulSays) {
+// This week's article = this week's newsletter issue (newsletter.js writes the draft on Thursdays);
+// it shows in the app under Mentors → Posts.
+export async function setWeeklyFromNewsletter(env, issue) {
   const s = await getSocial(env);
-  const week = todayISO();
-  const work = await workText(env).catch(() => "");
-  const past = s.weeklyHistory || [];
-  const r = parseJson(await gemini(env, [{ role: "user", parts: [{ text: `Alex (11th grader, TKS, focus: space tech, GNC + propulsion) writes ONE article a week
-(Substack for the weekly piece; his big technical pieces also go on Medium). Suggest this week's article from his real work and learning:
-${work}
-Past topics (don't repeat): ${past.join(" | ") || "(none)"}
-Make it 600-1000 words, something only he can write (his own build, results, mistakes, what he learned). Return JSON:
-{"title": "...", "hook": "first line", "outline": ["5-6 section bullets, each one line"], "proof": "which result/figure from his work backs it"}` }] }], { json: true, models: MODELS_SMART }));
-  if (!r?.title) return;
-  s.weekly = { week, title: String(r.title).slice(0, 160), hook: String(r.hook || "").slice(0, 300), outline: (r.outline || []).slice(0, 7).map((x) => String(x).slice(0, 200)), proof: String(r.proof || "").slice(0, 300) };
-  s.weeklyHistory = [...past, s.weekly.title].slice(-20);
+  s.weekly = { week: todayISO(), n: issue.n, date: issue.date, title: issue.title, hook: issue.hook || "", outline: issue.outline || [], proof: "", draftUrl: issue.draftUrl || "" };
   await saveSocial(env, s);
-  await haneulSays(env, `It's Sunday afternoon: time to plan Alex's weekly article. Suggest it in 1-2 short texts: "${s.weekly.title}" (hook: ${s.weekly.hook}).
-Say the full outline is in Mentors → Posts, and he can publish any day this week (on Substack; you'll notice it on his feed).`);
 }
 
 // For her prompt.
@@ -113,7 +149,7 @@ export async function socialContext(env) {
   const s = await getSocial(env);
   const today = s.days[todayISO()];
   const streak = socialStreak(s);
-  return `SOCIAL (Jordan told him to level up his networking: LinkedIn every day, X, one article a week): LinkedIn streak ${streak} day(s).
+  return `SOCIAL (Jordan told him to level up his networking: LinkedIn every day, X, one article a week, which is his Sunday newsletter): LinkedIn streak ${streak} day(s).
 ${today ? `Today's drafts are in Mentors → Posts (${today.idea}); LinkedIn ${today.posted?.linkedin ? "posted ✓" : "not posted yet"}, X ${today.posted?.x ? "posted ✓" : "not posted yet"}.` : "Today's drafts aren't made yet."}${s.weekly ? ` This week's article idea: "${s.weekly.title}".` : ""}
 If he says he posted, fill "social_posted" with "linkedin" and/or "x".`;
 }

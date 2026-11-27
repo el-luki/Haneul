@@ -24,7 +24,7 @@ jobs:
           python3 telegram-calendar-bot/backup_tables.py /tmp/latest.json
       - name: Save it to the "backups" branch (main is never touched)
         run: |
-          git config user.name "haneul"
+          git config user.name "haneul-bot"
           git config user.email "haneul-bot@users.noreply.github.com"
           if git ls-remote --exit-code --heads origin backups > /dev/null; then
             git checkout -B backups origin/backups

@@ -38,3 +38,19 @@ Spotify, phone/camera/settings.
   "I'm bored" gets a no first. She's firmer during school, homework (16:15–18:00) and after 20:30.
 - "lock it again": she locks it right away.
 - Sundays at 19:00: a weekly report (how many tries, which app you fight the most).
+
+## Find my phone (ring it from the PC)
+
+The PC sidebar → **Your phone** → **Ring my phone** sends a Telegram message starting with `📳 Find my phone`.
+One macro makes it ring even on silent:
+
+1. **Trigger** → Notification → **Notification Received** → app **Telegram**, text **contains** `Find my phone`.
+2. **Actions**: Volume → **Volume Change** → Alarm (and Ring) 100% · Media → **Play/Stop Sound** (an alarm tone,
+   stream Alarm) · Device Actions → **Vibrate** (long pattern) · optional **Flashlight** on for 10 s.
+3. Save. Turn it off by opening the phone; it rings once per ping.
+
+It only fires if the notification shows the text: Haneul's Telegram chat must not be muted, and Telegram →
+Settings → Notifications → **Message preview** must be on. MacroDroid also needs Notification Access.
+
+The same sheet sends a note, link or image to your phone (it arrives in Telegram), and sets the **put-it-down nudge**:
+after that many minutes of screen time without a break (Off / 30 / 45 / 60 / 90, default 45), Haneul texts you once.

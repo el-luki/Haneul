@@ -24,7 +24,7 @@ export function pickTimes(weekend, random = Math.random) {
   return times.sort((a, b) => a - b);
 }
 
-// Is Alex in something right now? (school, a TKS session, any personal event…)
+// Is Alex in something right now? (school, church, a TKS session, any personal event…)
 export function busyAt(events, minute) {
   return (events || []).some((e) => {
     if (e.all_day) return false;
@@ -55,7 +55,7 @@ export async function runCheckins(env) {
   const [, windowEnd] = weekend ? WINDOWS.weekend : WINDOWS.weekday;
 
   const lastChat = Number(await env.DB.get("last_user_msg")) || 0;
-  const busy = busyAt(await eventsForDay(env, today), now);
+  const busy = busyAt(await eventsForDay(env, today), now) || !!(await env.DB.get("focus"));
   if (busy || Date.now() - lastChat < 45 * 60000) {
     // try again in 30 minutes, if still inside today's window
     plan.times = plan.times.map((t) => (t === due ? now + 30 : t));

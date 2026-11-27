@@ -198,7 +198,7 @@ check("planned at 20:30 → nothing left today", planFor(weekday, "2026-11-09", 
 check("free gaps skip busy blocks", freeGaps([ev("10:00", "11:00", "x")], "09:00", "12:00"), [[540, 600], [660, 720]]);
 check("Fridays don't break the workout streak", workoutStreak({ "2026-11-05": { status: "done" }, "2026-11-07": { status: "done" } }, "2026-11-07"), 2);
 
-// Random check-ins: inside the windows, 2 h apart, never during school/events/TKS
+// Random check-ins: inside the windows, 2 h apart, never during school/church/TKS
 const { pickTimes, busyAt } = await import("../src/checkins.js");
 let ok = true;
 for (let i = 0; i < 200; i++) {
@@ -663,7 +663,10 @@ for (const f of readdirSync(wfDir).filter((x) => x.endsWith(".yml"))) {
   const csv = bibleCsv({ month: "2026-11", entries: log }).split("\r\n");
   check("bible: csv has a row per day", csv.length, 31);
   check("bible: csv row", csv[15], "2026-11-15,Domingo,Juan 3,15,,,,,conecté,9:30 a. m.,estaba enfermo");
-  check("phone: blocked by default", await phoneCheck(env, "Instagram"), "block");
+  check("phone: free time (nothing important on) → apps open", await phoneCheck(env, "Instagram"), "ok");
+  await env.DB.put("focus", JSON.stringify({ start: Date.now(), until: Date.now() + 30 * 60000, min: 30, label: "AP physics" }));
+  check("phone: blocked during a focus session", await phoneCheck(env, "Instagram"), "block");
+  check("phone: the home screen is never blocked (it would loop)", await phoneCheck(env, "Moto App Launcher"), "ok");
   await phoneUnlock(env, { app: "instagram", minutes: 999, reason: "school group" });
   check("phone: unlock is capped at 30 min", Math.round(((await env.DB.get("phone_unlock", "json")).until - Date.now()) / 60000), 30);
   check("phone: unlocked app opens", await phoneCheck(env, "Instagram"), "ok");
@@ -759,12 +762,297 @@ for (const f of readdirSync(wfDir).filter((x) => x.endsWith(".yml"))) {
   check("social: today counts once posted", socialStreak(s, "2026-11-18"), 3);
 }
 
+// X posting: OAuth 1.0a signature (X's documented example) and approve-once
+{
+  const { oauthHeader, pct } = await import("../src/xpost.js");
+  const h = await oauthHeader({ method: "POST", url: "https://api.twitter.com/1.1/statuses/update.json", params: { include_entities: "true", status: "Hello Ladies + Gentlemen, a signed OAuth request!" },
+    consumerKey: "xvz1evFS4wEEPTGEFPHBog", consumerSecret: "kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw", token: "370773112-GmHxMAgYyLbNEtIKZeRNFsMKPR9EyMZeS9weJAEb", tokenSecret: "LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE",
+    nonce: "kYjzVBB8Y0ZFabxSWbWovY3uYSQ2pTgmZeNu2VS4cg", timestamp: 1318622958 });
+  check("x: OAuth signature matches X's docs example", decodeURIComponent(h.match(/oauth_signature="([^"]+)"/)[1]), "hCtSmYh+iHYCEqBWrE7C7hYmtUk=");
+  check("x: RFC 3986 encoding", pct("Ladies + Gentlemen!*"), "Ladies%20%2B%20Gentlemen%21%2A");
+  const { approveX } = await import("../src/social.js");
+  const kv = new Map();
+  const env = { X_API_KEY: "a", X_API_SECRET: "b", X_ACCESS_TOKEN: "c", X_ACCESS_SECRET: "d", DB: { async get(k, ty) { const v = kv.get(k); return v === undefined ? null : ty === "json" ? JSON.parse(v) : v; }, async put(k, v) { kv.set(k, v); }, async delete(k) { kv.delete(k); } } };
+  const realFetch = globalThis.fetch; let posts = 0, auth = "";
+  globalThis.fetch = async (url, o) => { if (String(url).includes("api.x.com/2/tweets")) { posts++; auth = o.headers.Authorization; return new Response(JSON.stringify({ data: { id: "123", text: JSON.parse(o.body).text } }), { status: 201 }); } return realFetch(url, o); };
+  const r1 = await approveX(env, { text: "Lossless convexification in one tweet: move the bad constraint onto a helper variable." });
+  const r2 = await approveX(env, { text: "again" });
+  globalThis.fetch = realFetch;
+  check("x: approved post goes out once", [r1.url, posts, /^OAuth oauth_consumer_key="a"/.test(auth)], ["https://x.com/i/web/status/123", 1, true]);
+  check("x: a second approve the same day is refused", /already up/.test(r2.error || ""), true);
+  check("x: too long is refused before calling X", ((await approveX({ ...env, DB: { async get() { return null; }, async put() {} } }, { text: "x".repeat(281) })).error || "").includes("280"), true);
+}
+
+// LinkedIn: text escaping, API versions, approve-once
+{
+  const { liText, liVersions } = await import("../src/lipost.js");
+  check("li: special characters escaped, hashtags kept", liText("G-FOLD (2007) uses * and _ #SpaceTech #GNC"), "G-FOLD \\(2007\\) uses \\* and \\_ {hashtag|\\#|SpaceTech} {hashtag|\\#|GNC}");
+  check("li: recent API versions first", liVersions(new Date("2026-11-19T12:00:00Z")), ["202610", "202608", "202605", "202602"]);
+  const { approveLinkedIn } = await import("../src/social.js");
+  const kv = new Map([["linkedin_auth", JSON.stringify({ token: "tok", expires_at: Date.now() + 86400000, sub: "abc123", name: "Test" })]]);
+  const env = { LINKEDIN_CLIENT_ID: "i", LINKEDIN_CLIENT_SECRET: "s", DB: { async get(k, ty) { const v = kv.get(k); return v === undefined ? null : ty === "json" ? JSON.parse(v) : v; }, async put(k, v) { kv.set(k, v); }, async delete(k) { kv.delete(k); } } };
+  const realFetch = globalThis.fetch; let calls = 0, sent = null, versions = [];
+  globalThis.fetch = async (url, o) => {
+    if (String(url).includes("api.linkedin.com/rest/posts")) {
+      calls++; versions.push(o.headers["LinkedIn-Version"]); sent = JSON.parse(o.body);
+      if (calls === 1) return new Response(JSON.stringify({ message: "Requested version 20261000 is not active" }), { status: 426 });
+      return new Response("", { status: 201, headers: { "x-restli-id": "urn:li:share:777" } });
+    }
+    return realFetch(url, o);
+  };
+  const r1 = await approveLinkedIn(env, { text: "Testing (once) #GNC" });
+  const r2 = await approveLinkedIn(env, { text: "again" });
+  globalThis.fetch = realFetch;
+  check("li: retries an older API version, then posts", [calls, versions.length, r1.url], [2, 2, "https://www.linkedin.com/feed/update/urn:li:share:777/"]);
+  check("li: author + escaped text", [sent.author, sent.commentary, sent.visibility], ["urn:li:person:abc123", "Testing \\(once\\) {hashtag|\\#|GNC}", "PUBLIC"]);
+  check("li: a second approve the same day is refused", /already up/.test(r2.error || ""), true);
+}
+
+// LinkedIn through a Make.com webhook (no LinkedIn developer app)
+{
+  const { approveLinkedIn } = await import("../src/social.js");
+  const { liStatus } = await import("../src/lipost.js");
+  const kv = new Map();
+  const env = { LINKEDIN_WEBHOOK_URL: "https://hook.us1.make.com/abc", DB: { async get(k, ty) { const v = kv.get(k); return v === undefined ? null : ty === "json" ? JSON.parse(v) : v; }, async put(k, v) { kv.set(k, v); }, async delete(k) { kv.delete(k); } } };
+  check("li webhook: counts as connected, no expiry", [(await liStatus(env)).connected, (await liStatus(env)).via], [true, "make"]);
+  const realFetch = globalThis.fetch; let got = null;
+  globalThis.fetch = async (url, o) => { if (String(url).startsWith("https://hook.us1.make.com/")) { got = JSON.parse(o.body); return new Response("Accepted", { status: 200 }); } return realFetch(url, o); };
+  const r = await approveLinkedIn(env, { text: "Plain text (no escaping needed) #GNC" });
+  globalThis.fetch = realFetch;
+  check("li webhook: sends the approved text as is", [got?.text, r.ok], ["Plain text (no escaping needed) #GNC", true]);
+}
+
+// X with no API credits → free share-page mode
+{
+  const { approveX } = await import("../src/social.js");
+  const kv = new Map();
+  const env = { X_API_KEY: "a", X_API_SECRET: "b", X_ACCESS_TOKEN: "c", X_ACCESS_SECRET: "d", DB: { async get(k, ty) { const v = kv.get(k); return v === undefined ? null : ty === "json" ? JSON.parse(v) : v; }, async put(k, v) { kv.set(k, v); }, async delete(k) { kv.delete(k); } } };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, o) => (String(url).includes("api.x.com/2/tweets") ? new Response(JSON.stringify({ title: "CreditsDepleted", detail: "Your enrolled account does not have any credits", status: 402 }), { status: 402 }) : realFetch(url, o));
+  const r = await approveX(env, { text: "hello" });
+  globalThis.fetch = realFetch;
+  check("x: no credits → clear error + share mode", [r.noCredits, kv.get("x_mode")], [true, "share"]);
+}
+
+// Networking Tracker (Notion) ↔ outreach contacts
+{
+  const { rowFor, pullEdits, readRow, differs } = await import("../src/tracker.js");
+  const sent = { id: "x", name: "Ana Ruiz", org: "Blue Origin", stage: "sent", lastContact: "2026-11-10", email: "a@b.co", notes: "GNC lead", log: [] };
+  const r = rowFor(sent, { cadence: 7, topic: "Inquiry regarding TVC" });
+  check("tracker: follow-up = last + cadence", r.follow, "2026-11-17");
+  check("tracker: stage + relationship", [r.stage, r.rel, r.org], ["Sent", "Industry Acquaintance", "Blue Origin"]);
+  check("tracker: mentor relationship", rowFor({ ...sent, stage: "mentor" }).rel, "Mentor");
+  check("tracker: closed has no follow-up", rowFor({ ...sent, stage: "closed" }).follow, "");
+  check("tracker: company-only contact", [rowFor({ id: "spacex", org: "SpaceX", stage: "drafted" }).name, rowFor({ id: "spacex", org: "SpaceX", stage: "drafted" }).org], ["SpaceX", ""]);
+  const c = { ...sent, log: [] };
+  check("tracker: no edit, nothing pulled", pullEdits(c, { ...r }, r), false);
+  check("tracker: his follow-up date wins", [pullEdits(c, { ...r, follow: "2026-11-25" }, r), c.nextFollowUp], [true, "2026-11-25"]);
+  check("tracker: same row = no write", differs(r, { ...r }), false);
+  const page = { id: "p1", properties: { "Contact Name": { type: "title", title: [{ plain_text: "Ana Ruiz" }] }, Relationship: { type: "select", select: { name: "Mentor" } }, "Follow-up Date": { type: "date", date: { start: "2026-12-01" } }, Notes: { type: "rich_text", rich_text: [{ plain_text: "met at braindate" }] }, "Haneul ID": { type: "rich_text", rich_text: [{ plain_text: "x" }] } } };
+  const row = readRow(page);
+  const { parseBraindate } = await import("../src/tracker.js");
+  check("braindate: date (day/month) + focus", parseBraindate("8/11/2026\nFocus: cancer (thought about diabetes)\nwants to integrate ai"), { date: "2026-11-08", focus: "cancer (thought about diabetes)", notes: "wants to integrate ai" });
+  const { matchPerson } = await import("../src/tkslife.js");
+  const ppl = [{ id: "1", name: "Priya Shah" }, { id: "2", name: "Karina Díaz Infante Simancas" }, { id: "3", name: "Hiwot Tsegaye" }];
+  check("tks: match full name", matchPerson(ppl, "Hiwot Tsegaye")?.id, "3");
+  check("tks: match without accents / shorter", matchPerson(ppl, "Karina Diaz Infante Simancas")?.id, "2");
+  check("tks: match first name only", matchPerson(ppl, "Priya")?.id, "1");
+  check("tks: no match", matchPerson(ppl, "Turkeya Alhemeiri"), null);
+  const { INTERESTS } = await import("../src/tkslife.js");
+  check("tks: interests", ["Space Tech", "rocket landing", "Electrical Engineering!", "different startup spaces in healthcare"].map((t) => INTERESTS.test(t)), [true, true, false, false]);
+  const { groupBraindates, mergeLog } = await import("../src/tkslife.js");
+  const grp = groupBraindates([
+    { id: 1, happenedAt: "2026-11-10T15:00:00Z", title: "Space", note: "rockets\nand GNC", people: [{ id: "a", name: "Ana" }] },
+    { id: 2, happenedAt: "2026-10-01T15:00:00Z", title: "SAT", note: "tips", people: [{ id: "a", name: "Ana" }, { id: "b", name: "Bo" }] },
+  ]);
+  check("backfill: one entry per person", grp.map((g) => g.person.name), ["Ana", "Bo"]);
+  check("backfill: met on = earliest", grp[0].met.slice(0, 10), "2026-10-01");
+  check("backfill: log keeps every braindate, newest first", mergeLog("", grp[0].lines).split("\n"), ["2026-11-10 · Space: rockets and GNC", "2026-10-01 · SAT: tips"]);
+  check("backfill: merge drops dupes + old one-line logs", mergeLog("Space: old\n2026-10-01 · SAT: tips", grp[0].lines).split("\n").length, 2);
+  check("braindate: no date line", parseBraindate("robotics + space\nfrom Toronto").date, "");
+  check("tracker: reads a Notion row", [row.name, row.rel, row.follow, row.notes, row.hid, row.last], ["Ana Ruiz", "Mentor", "2026-12-01", "met at braindate", "x", ""]);
+}
+
+// Bedtime only near 20:30; sleep talk cut before 20:00 (she said "bedtime in 15 min" at 15:07)
+{
+  const { bedtimeLine, stripBedtime } = await import("../src/chat.js");
+  check("bedtime: nothing in the prompt at 8:00", bedtimeLine(8, 0), "");
+  check("bedtime: nothing at 15:07", bedtimeLine(15, 7), "");
+  check("bedtime: reminder at 20:10", /in 20 min/.test(bedtimeLine(20, 10)), true);
+  check("bedtime: past at 21:00", /past his bedtime/.test(bedtimeLine(21, 0)), true);
+  check("guard: cut at 15:07", stripBedtime(["bedtime is in 15 mins", "u got this captain"], { h: 15, m: 7 }), ["u got this captain"]);
+  check("guard: cut one sentence, keep the rest", stripBedtime(["nice work today! time to wind down soon. physics tomorrow?"], { h: 19, m: 0 }), ["nice work today! physics tomorrow?"]);
+  check("guard: allowed after 20:00", stripBedtime(["bedtime in 20 min"], { h: 20, m: 10 }), ["bedtime in 20 min"]);
+  check("guard: allowed if he asked about sleep", stripBedtime(["go to bed earlier tonight"], { h: 8, m: 0, asked: true }), ["go to bed earlier tonight"]);
+}
+
 // Bedtime is spelled out (she told him to sleep at 18:21)
 {
   const { bedtimeLine } = await import("../src/chat.js");
-  check("bedtime: 18:21 → don't mention sleep", /Do NOT mention sleep/.test(bedtimeLine(18, 21)), true);
-  check("bedtime: 19:45 → wind down soon", /in 45 min/.test(bedtimeLine(19, 45)), true);
+  check("bedtime: 18:21 → nothing about sleep", bedtimeLine(18, 21), "");
+  check("bedtime: 20:05 → wind down soon", /in 25 min/.test(bedtimeLine(20, 5)), true);
   check("bedtime: 21:10 → past bedtime", /past his bedtime/.test(bedtimeLine(21, 10)), true);
+}
+
+// Separate keys: the phone's own key, the old secret only while moving over
+{
+  const { phoneKeyOk, telegramSecretOk } = await import("../src/keys.js");
+  const kv = new Map([["phone_key", "abcd-efgh-ijkl-mnop-qrst-uvwx"], ["tg_secret", "tg_secret_value_123456"]]);
+  const env = { WORKER_SECRET: "oldsecret", DB: { async get(k) { return kv.has(k) ? kv.get(k) : null; } } };
+  check("keys: the phone key opens phone routes", await phoneKeyOk(env, "abcd-efgh-ijkl-mnop-qrst-uvwx"), true);
+  check("keys: a wrong key doesn't", await phoneKeyOk(env, "nope"), false);
+  check("keys: empty doesn't", await phoneKeyOk(env, ""), false);
+  check("keys: the old secret still works while moving over", await phoneKeyOk(env, "oldsecret"), true);
+  check("keys: Telegram's own secret works", await telegramSecretOk(env, "tg_secret_value_123456"), true);
+  kv.set("legacy_keys", "off");
+  check("keys: after the switch, the old secret no longer opens phone routes", await phoneKeyOk(env, "oldsecret"), false);
+  check("keys: ...nor Telegram", await telegramSecretOk(env, "oldsecret"), false);
+  check("keys: the new keys still work", [await phoneKeyOk(env, "abcd-efgh-ijkl-mnop-qrst-uvwx"), await telegramSecretOk(env, "tg_secret_value_123456")], [true, true]);
+}
+
+// Haneul Station device: LCD text and mood
+{
+  const { lcd, pickMode, MODE_COLOR } = await import("../src/device.js");
+  check("device: lcd strips accents and cuts to 16", lcd("Física: Unidad 1 — cinemática"), "Fisica: Unidad 1");
+  check("device: focus wins", pickMode({ focus: { until: 1 }, hour: 22, overdue: 3, newMessage: true }), "focus");
+  check("device: night sleeps", pickMode({ focus: null, hour: 22, overdue: 3, newMessage: true }), "sleep");
+  check("device: a new text beats overdue", pickMode({ focus: null, hour: 15, overdue: 3, newMessage: true }), "talk");
+  check("device: overdue → alert", pickMode({ focus: null, hour: 15, overdue: 1, newMessage: false }), "alert");
+  check("device: otherwise idle", pickMode({ focus: null, hour: 15, overdue: 0, newMessage: false }), "idle");
+  check("device: every mode has a color", ["idle", "talk", "alert", "focus", "sleep"].every((m) => MODE_COLOR[m]?.length === 3), true);
+}
+
+// Screen time: sessions split by hour and across midnight, capped, unlocks counted
+{
+  const { splitSession, screenEvent, screenDay, MAX_SESSION } = await import("../src/screen.js");
+  const at = (iso) => Date.parse(iso);
+  check("screen: split at the hour (Lima time)", splitSession(at("2026-11-22T14:50:00-05:00"), at("2026-11-22T15:10:00-05:00")).map((p) => [p.date, p.hour, p.ms / 60000]), [["2026-11-22", 14, 10], ["2026-11-22", 15, 10]]);
+  check("screen: across midnight", splitSession(at("2026-11-22T23:50:00-05:00"), at("2026-11-23T00:05:00-05:00")).map((p) => [p.date, p.hour, p.ms / 60000]), [["2026-11-22", 23, 10], ["2026-11-23", 0, 5]]);
+  // a tiny stand-in for the D1 table
+  const rows = [];
+  const env = { FEED: { prepare(sql) { return { bind(...a) { return {
+    async run() { if (/^INSERT/.test(sql)) rows.push({ id: rows.length + 1, ts: a[0], state: a[1] }); return {}; },
+    async all() { return { results: rows.filter((r) => r.ts >= a[0] && r.ts < a[1]).sort((x, y) => x.ts - y.ts || x.id - y.id) }; },
+  }; } }; } } };
+  await screenEvent(env, "on", at("2026-11-22T10:00:00-05:00"));
+  await screenEvent(env, "on", at("2026-11-22T10:05:00-05:00")); // repeated on: ignored
+  await screenEvent(env, "off", at("2026-11-22T10:20:00-05:00"));
+  await screenEvent(env, "on", at("2026-11-22T12:00:00-05:00"));
+  await screenEvent(env, "off", at("2026-11-22T20:00:00-05:00")); // missed off for 8 h → capped
+  const d = await screenDay(env, "2026-11-22", at("2026-11-22T21:00:00-05:00"));
+  check("screen: minutes (20 + capped 180)", d.minutes, 20 + MAX_SESSION / 60000);
+  check("screen: unlocks", d.unlocks, 2);
+  check("screen: per hour", [d.hours[10], d.hours[12], d.hours[14], d.hours[15]], [20, 60, 60, 0]);
+  await screenEvent(env, "on", at("2026-11-22T21:00:00-05:00"));
+  const live = await screenDay(env, "2026-11-22", at("2026-11-22T21:30:00-05:00"));
+  check("screen: an open session counts live", [live.minutes, live.unlocks, live.live], [230, 3, true]);
+  // the real pattern from his phone: on, off 11 s later, on again 2 s after that → 2 unlocks
+  const { sessionsFrom, summarize } = await import("../src/screen.js");
+  {
+    const { openStretch } = await import("../src/phoneping.js");
+    const t0 = Date.parse("2026-11-26T20:00:00-05:00");
+    check("phone nudge: open stretch minutes", openStretch([{ ts: t0, state: "on" }, { ts: t0 + 600000, state: "on" }], t0 + 50 * 60000)?.minutes, 50);
+    const { cleanDraft } = await import("../src/outreach.js");
+    check("outreach: EEG pitch dropped", cleanDraft("Hi", "I'm building an EEG brain-computer interface"), null);
+    check("outreach: article title fixed", cleanDraft("Hi", 'I wrote "Why Rocket Guidance Needs Convex Math" on Medium'), 'I wrote "Why Landing a Rocket Is a Math Problem" on Medium');
+    check("phone nudge: screen off = no stretch", openStretch([{ ts: t0, state: "on" }, { ts: t0 + 60000, state: "off" }], t0 + 50 * 60000), null);
+  }
+  const ev = [{ ts: 1000, state: "on" }, { ts: 12153, state: "off" }, { ts: 14000, state: "on" }];
+  check("screen: quick off/on keeps both unlocks", sessionsFrom(ev, 20000).length, 2);
+  const yday = summarize(sessionsFrom([{ ts: at("2026-11-21T23:30:00-05:00"), state: "on" }, { ts: at("2026-11-22T00:30:00-05:00"), state: "off" }]), ["2026-11-21", "2026-11-22"]);
+  check("screen: a session over midnight counts on both days", yday.map((d) => [d.minutes, d.unlocks]), [[30, 1], [30, 0]]);
+}
+
+// Substack / feed addresses
+{
+  const { substackFeedUrl, toFeedUrl } = await import("../src/work.js");
+  check("substack: a name", substackFeedUrl("whyitlands"), "https://whyitlands.substack.com/feed");
+  check("substack: @name", substackFeedUrl("@WhyItLands"), "https://whyitlands.substack.com/feed");
+  check("substack: a post link", substackFeedUrl("https://whyitlands.substack.com/p/how-do-you-land-a-rocket?r=abc"), "https://whyitlands.substack.com/feed");
+  check("substack: no https", substackFeedUrl("whyitlands.substack.com"), "https://whyitlands.substack.com/feed");
+  check("substack: custom domain", substackFeedUrl("https://news.alex.dev/p/issue-1"), "https://news.alex.dev/feed");
+  check("substack: a profile page isn't a publication", substackFeedUrl("https://substack.com/@alex"), "");
+  check("feeds: medium handle", toFeedUrl("@alexrivera"), "https://medium.com/feed/@alexrivera");
+  check("feeds: blog link gets /feed", toFeedUrl("https://blog.example.com/"), "https://blog.example.com/feed");
+  check("feeds: feed links stay", toFeedUrl("https://example.com/rss.xml"), "https://example.com/rss.xml");
+}
+
+// TKS.life: maintenance windows and confirmed sign-outs
+{
+  const { inMaintenance, signoutConfirmed, MAINTENANCE } = await import("../src/tkslife.js");
+  const at = (iso) => Date.parse(iso);
+  check("tks: Nov 22 16:59 Lima is before maintenance", inMaintenance(at("2026-11-22T21:59:00Z")), null);
+  check("tks: 17:00 Lima is maintenance", !!inMaintenance(at("2026-11-22T22:00:00Z")), true);
+  check("tks: 19:20 Lima still paused (30 min buffer)", !!inMaintenance(at("2026-11-23T00:20:00Z")), true);
+  check("tks: 19:31 Lima syncs again", inMaintenance(at("2026-11-23T00:31:00Z")), null);
+  check("tks: window is 2-4pm PST", MAINTENANCE[0], ["2026-11-22T22:00:00Z", "2026-11-23T00:00:00Z"]);
+  check("tks: first 401 isn't a sign-out", signoutConfirmed(undefined), false);
+  check("tks: 401s for 30 min aren't a sign-out", signoutConfirmed("2026-11-22T22:00:00Z", at("2026-11-22T22:30:00Z")), false);
+  check("tks: 401s for 90 min are", signoutConfirmed("2026-11-22T22:00:00Z", at("2026-11-22T23:31:00Z")), true);
+}
+
+// Phone focus by calendar, debrief names, GitHub notes, focus helpers, week highlights
+{
+  const { importantEvent, importantNow } = await import("../src/phone.js");
+  const ev = (title, tag, s, e) => ({ title, tag, start: `2026-11-23T${s}:00-05:00`, end: `2026-11-23T${e}:00-05:00` });
+  for (const [e, want] of [
+    [ev("Physics: 11 (2)", "SCHOOL", "08:07", "08:52"), true], [ev("Homework/Physics", "ROUTINE", "16:15", "18:00"), true],
+    [ev("Priya Shah and Alex Rivera", "PERSONAL", "10:00", "10:30"), true], [ev("C8: TKS Velocity Sessions", "PERSONAL", "16:30", "17:00"), true],
+    [ev("Church", "PERSONAL", "11:30", "14:00"), true], [ev("Lunch", "ROUTINE", "12:00", "13:00"), false], [ev("Bus (semi-available)", "ROUTINE", "15:00", "16:15"), false],
+    [ev("Velocity: Complete daily update", "PERSONAL", "18:00", "18:30"), false], [ev("Canceled: Alex Andrés and Nina Park", "PERSONAL", "15:00", "15:30"), false],
+    [ev("Music Time/Get Ready for Bed", "ROUTINE", "20:00", "21:00"), false], [ev("School", "ROUTINE", "07:15", "15:00"), false],
+  ]) check(`phone: "${e.title}" ${want ? "blocks" : "doesn't block"}`, importantEvent(e), want);
+  const day = [ev("School", "ROUTINE", "07:15", "15:00"), ev("Physics: 11 (2)", "SCHOOL", "08:07", "08:52"), ev("Lunch", "ROUTINE", "12:00", "13:00")];
+  check("phone: 8:30 is physics class", importantNow(day, 8 * 60 + 30)?.title, "Physics: 11 (2)");
+  check("phone: 12:15 is free (lunch)", importantNow(day, 12 * 60 + 15), null);
+
+  const { meetingWith } = await import("../src/debrief.js");
+  check("debrief: name before 'and Alex'", meetingWith("Priya Shah and Alex Rivera"), "Priya Shah");
+  check("debrief: name after 'Alex … and'", meetingWith("Alex Rivera and Lena Kowalski"), "Lena Kowalski");
+  check("debrief: double spaces", meetingWith("Diego Ramos  and Alex Rivera"), "Diego Ramos");
+  check("debrief: canceled meetings are skipped", meetingWith("Canceled: Alex Rivera and Nina Park"), null);
+  check("debrief: not a 1:1", meetingWith("C8: TKS Velocity Sessions"), null);
+
+  const { pushNote, noisy } = await import("../src/progress.js");
+  const cmp = { total_commits: 3, commits: [{ commit: { message: "Added mars example" } }, { commit: { message: "Merge branch 'main'" } }, { commit: { message: "Fair no-floor test\n\nlong body" } }],
+    files: [{ filename: "README.md", additions: 1 }, { filename: "mars_example/gfold_mars_2013.py", additions: 140 }] };
+  check("github: push note", pushNote("alexrivera/Lander-Sim", cmp), "Lander Sim: 3 commits (Added mars example; Fair no-floor test). Files: mars_example/gfold_mars_2013.py, README.md");
+  check("github: merge commits are noise", [noisy("Merge pull request #3 from x"), noisy("Added mars example")], [true, false]);
+  check("github: empty push → no note", pushNote("a/b", { commits: [], files: [] }), "");
+
+  const { playlistUri, isAp } = await import("../src/focus.js");
+  check("focus: playlist link → uri", playlistUri("https://open.spotify.com/intl-es/playlist/37i9dQZF1DWZeKCadgRdKQ?si=x"), "spotify:playlist:37i9dQZF1DWZeKCadgRdKQ");
+  check("focus: not a playlist", playlistUri("https://open.spotify.com/track/abc"), null);
+  check("focus: AP labels", [isAp("AP physics"), isAp("física"), isAp("G-FOLD")], [true, true, false]);
+
+  const { highlights, weekDays } = await import("../src/week.js");
+  check("week: 7 days ending today", weekDays("2026-11-21"), ["2026-11-15", "2026-11-16", "2026-11-17", "2026-11-18", "2026-11-19", "2026-11-20", "2026-11-21"]);
+  const days = weekDays("2026-11-21").map((d, i) => ({ d, focus: i === 3 ? 90 : 0, ap: i === 3 ? 30 : 10 }));
+  check("week: best focus day", highlights(days, { linkedin: 5, outreach: 2, commits: 0 })[0], "Best focus day: Wednesday (120 min).");
+}
+
+// Weekly newsletter: which issue is current, matching a Substack post, the next Sunday
+{
+  const { seedNewsletter, currentIssue, upcomingIssues, issueForPost, nextSendDate, formatCalendar, draftPrompt, PRIVACY } = await import("../src/newsletter.js");
+  const nl = seedNewsletter();
+  check("newsletter: 6 seeded issues, all on Sundays", nl.issues.map((i) => new Date(i.date + "T12:00:00Z").getUTCDay()), [0, 0, 0, 0, 0, 0]);
+  check("newsletter: current on Sat Nov 21 is #1", currentIssue(nl, "2026-11-21").n, 1);
+  check("newsletter: a late send (Tue after) still counts as #1", currentIssue(nl, "2026-12-01").n, 1);
+  check("newsletter: 4 days late moves on to #2", currentIssue(nl, "2026-12-03").n, 2);
+  check("newsletter: a post on Sun Nov 29 is #1", issueForPost(nl, "2026-11-29").n, 1);
+  check("newsletter: a post on Mon Dec 7 is #2", issueForPost(nl, "2026-12-07").n, 2);
+  check("newsletter: a post mid-gap (Thu Dec 3) still matches the closest", issueForPost(nl, "2026-12-03").n, 2);
+  nl.issues[0].status = "sent";
+  check("newsletter: once #1 is sent, #2 is current", currentIssue(nl, "2026-11-30").n, 2);
+  check("newsletter: a sent issue isn't matched again", issueForPost(nl, "2026-11-29"), null);
+  check("newsletter: upcoming skips sent ones", upcomingIssues(nl, "2026-11-21").length, 5);
+  check("newsletter: next send date is the Sunday after the last issue", nextSendDate(nl, "2026-11-21"), "2027-01-10");
+  check("newsletter: empty calendar → the next Sunday", nextSendDate({ issues: [] }, "2026-11-21"), "2026-11-22");
+  check("newsletter: calendar marks the current issue", /▶ #2 Dec 6/.test(formatCalendar(nl, "2026-11-30")), true);
+  const p = draftPrompt(nl.issues[1], "G-FOLD sim in Python", "Why It Lands");
+  check("newsletter: draft prompt carries the privacy lines and the format", p.includes(PRIVACY) && p.includes("The ask") && p.includes('"Why It Lands"'), true);
+  check("/help newsletter", helpText("substack").split("\n")[0], "📰 Weekly newsletter");
+  check("/help monthly still works", helpText("monthly").split("\n")[0], "📰 Monthly TKS update");
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

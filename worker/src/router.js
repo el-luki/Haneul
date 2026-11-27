@@ -17,6 +17,7 @@ import { onKoreanCommand } from "./korean.js";
 import { onLink, onVideo } from "./links.js";
 import { onMemoryCommand, rememberPhrase } from "./memory.js";
 import { runMusic, spotifyConnectLink } from "./music.js";
+import { onNewsletterCommand } from "./newsletter.js";
 import { onNoteCommand } from "./notes.js";
 import { downloadImage, onButton, onPhoto } from "./photos.js";
 import { startGithubJob } from "./reminders.js";
@@ -83,6 +84,21 @@ export async function onMessage(msg, env) {
   if (msg.reply_to_message && msg.text) {
     const tutor = await env.DB.get("tutor", "json");
     if (tutor && tutor.check_message_id === msg.reply_to_message.message_id) return checkTutorAnswer(env, tutor, msg.text);
+  }
+
+  // A reply to the "how was your chat with …?" question (text or voice) becomes a debrief + thank-you draft.
+  if (msg.reply_to_message) {
+    const dp = await env.DB.get("debrief_pending", "json");
+    if (dp && dp.message_id === msg.reply_to_message.message_id && (msg.text || msg.voice || msg.audio)) {
+      await typing(env);
+      let answer = msg.text || "";
+      if (!answer) {
+        const f = msg.voice || msg.audio;
+        const audio = msg.app_part || (await downloadImage(env, { fileId: f.file_id, mime: f.mime_type || "audio/ogg" }));
+        answer = (await gemini(env, [{ role: "user", parts: [audio, { text: "Transcribe this voice note exactly, in its original language. Reply with only the transcript." }] }])).trim();
+      }
+      return (await import("./debrief.js")).saveDebrief(env, answer, dp);
+    }
   }
 
   // A reply to tonight's journal question (text or voice) is saved as the answer.
@@ -198,6 +214,10 @@ export async function onText(text, env) {
   if (cmd === "/journal") return onJournalCommand(env, arg);
   if (cmd === "/habits" || cmd === "/habit") return onHabitCommand(env, cmd, arg);
   if (cmd === "/korean" || cmd === "/coreano") return onKoreanCommand(env, arg);
+  if (cmd === "/newsletter" || cmd === "/boletin") return onNewsletterCommand(env, arg);
+  if (cmd === "/substack") return (await import("./work.js")).onSubstackCommand(env, arg);
+  if (cmd === "/focus" || cmd === "/enfoque") return (await import("./focus.js")).onFocusCommand(env, arg);
+  if (cmd === "/week" || cmd === "/semana") return send(env, "📊 Your week in review is in the app: open Today → This week (or Haneul's menu → This week).");
   if (cmd === "/monthly") {
     await send(env, "📰 Writing your monthly TKS update draft on GitHub. It arrives in about a minute.");
     return startGithubJob(env, "monthly-update.yml");

@@ -1,4 +1,4 @@
-// Claude Administrator - Telegram bot running on a free Cloudflare Worker.
+// Haneul - Telegram bot running on a free Cloudflare Worker.
 //
 // Telegram sends every message to POST /telegram (a "webhook"), so the bot
 // answers within seconds. To-dos live in Cloudflare KV (a small free database)
@@ -66,16 +66,39 @@ export default {
     // MacroDroid on the phone sends every WhatsApp notification here.
     // Accepts query parameters (?title=..&text=..), a form body or a JSON body.
     if (url.pathname === "/whatsapp" && request.method === "POST") {
-      const auth = request.headers.get("Authorization") || `Bearer ${url.searchParams.get("key") || ""}`;
-      if (auth !== `Bearer ${env.WORKER_SECRET}`) return new Response("unauthorized", { status: 401 });
+      if (!(await (await import("./keys.js")).phoneKeyOk(env, (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "") || url.searchParams.get("key") || ""))) return new Response("unauthorized", { status: 401 });
       const n = await readNotification(request, url);
       if (n.title || n.text) await env.WA_JOBS.send(n);
       return new Response("ok");
     }
 
     // MacroDroid: a blocked app (social media, games) just opened. "block" = back to the home screen.
+    // Haneul Station (the desk face module): its own key, only these routes.
+    if (url.pathname.startsWith("/device/")) {
+      const dev = await import("./device.js");
+      if (!(await dev.deviceAuthorized(env, url.searchParams.get("key")))) return new Response("unauthorized", { status: 401 });
+      if (url.pathname === "/device/state") return Response.json(await dev.deviceState(env));
+      if (url.pathname === "/device/focus" && request.method === "POST") {
+        const { startFocus } = await import("./focus.js");
+        return Response.json({ focus: await startFocus(env, { minutes: url.searchParams.get("min"), label: url.searchParams.get("label") || "Deep work" }) });
+      }
+      if (url.pathname === "/device/stop" && request.method === "POST") return Response.json(await (await import("./focus.js")).stopFocus(env));
+      return new Response("not found", { status: 404 });
+    }
+
     if (url.pathname === "/phone" && (request.method === "GET" || request.method === "POST")) {
-      if (url.searchParams.get("key") !== env.WORKER_SECRET) return new Response("unauthorized", { status: 401 });
+      if (!(await (await import("./keys.js")).phoneKeyOk(env, url.searchParams.get("key")))) return new Response("unauthorized", { status: 401 });
+      // screen on/off (screen time) uses the same address: /phone?key=…&screen=on|off
+      if (url.searchParams.get("screen")) {
+        if (!(await env.DB.get("screen_setup"))) await env.DB.put("screen_setup", new Date().toISOString());
+        const { screenEvent } = await import("./screen.js");
+        return new Response(await screenEvent(env, url.searchParams.get("screen")), { headers: { "Content-Type": "text/plain" } });
+      }
+      // Any app opening means the screen is on (the home screen opens on every unlock), so it also starts a
+      // screen-time session; a repeated "on" while one is open is ignored. Covers phones where the unlock macro doesn't fire.
+      if (url.searchParams.get("app") && (await env.DB.get("screen_setup"))) {
+        await (await import("./screen.js")).screenEvent(env, "on").catch((err) => console.error("screen on:", err.message));
+      }
       const { phoneCheck } = await import("./phone.js");
       if (!(await env.DB.get("phone_setup"))) await env.DB.put("phone_setup", new Date().toISOString());
       const answer = await phoneCheck(env, url.searchParams.get("app"), { say: (task) => env.BG_JOBS.send({ kind: "say", task }) });
@@ -116,8 +139,7 @@ export default {
 
     // MacroDroid forwards every Slack notification here (same password as /whatsapp).
     if (url.pathname === "/slack" && request.method === "POST") {
-      const auth = request.headers.get("Authorization") || `Bearer ${url.searchParams.get("key") || ""}`;
-      if (auth !== `Bearer ${env.WORKER_SECRET}`) return new Response("unauthorized", { status: 401 });
+      if (!(await (await import("./keys.js")).phoneKeyOk(env, (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "") || url.searchParams.get("key") || ""))) return new Response("unauthorized", { status: 401 });
       const n = await readNotification(request, url);
       if (n.title || n.text) await env.SLACK_JOBS.send({ ...n, at: new Date().toISOString() });
       return new Response("ok");
@@ -144,6 +166,7 @@ export default {
 
     // Spotify connection (one-time login in the browser).
     if (url.pathname === "/spotify/login" || url.pathname === "/spotify/callback") return spotifyRoutes(url, env);
+    if (url.pathname === "/linkedin/callback") return (await import("./lipost.js")).liCallback(url, env);
 
     // The Sunday review (GitHub Actions) reads to-dos, AP status and this week's ideas from here.
     if (url.pathname === "/review-data" && request.method === "GET") {
@@ -205,7 +228,7 @@ export default {
 
     // Telegram webhook. The secret header proves the request really comes from Telegram.
     if (url.pathname === "/telegram" && request.method === "POST") {
-      if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WORKER_SECRET) {
+      if (!(await (await import("./keys.js")).telegramSecretOk(env, request.headers.get("X-Telegram-Bot-Api-Secret-Token")))) {
         return new Response("unauthorized", { status: 401 });
       }
       // Hand the message to the background queue and answer Telegram immediately.
@@ -214,7 +237,7 @@ export default {
       return new Response("ok");
     }
 
-    return new Response("Haneul (Claude Administrator bot) is running.");
+    return new Response("Haneul is running.");
   },
 
   // Background worker: handles one Telegram update at a time, with no time pressure.
@@ -250,9 +273,11 @@ export default {
         else if (message.body.kind === "outreach_weekly") await weeklySearch(env);
         else if (message.body.kind === "outreach_prep") await prepOutreach(env);
         else if (message.body.kind === "outreach_discover") await (await import("./outreach.js")).discoverMentors(env);
+        else if (message.body.kind === "outreach_discover_web") await (await import("./outreach.js")).discoverWeb(env, message.body.want || 10);
+        else if (message.body.kind === "outreach_research_all") await (await import("./outreach.js")).researchAll(env);
         else if (message.body.kind === "social") await (await import("./social.js")).socialDaily(env, haneulSays);
         else if (message.body.kind === "social_new") await (await import("./social.js")).draftSocial(env, { again: true });
-        else if (message.body.kind === "weekly_article") await (await import("./social.js")).weeklyArticle(env, haneulSays);
+        else if (message.body.kind === "newsletter") await (await import("./newsletter.js")).newsletterJob(env, haneulSays, message.body.step);
         else if (message.body.kind === "qotd") await (await import("./daily.js")).sendQotd(env, haneulSays);
         else if (message.body.kind === "sat") await (await import("./daily.js")).sendSat(env);
         else if (message.body.kind === "course") await (await import("./course.js")).courseNudge(env, haneulSays, message.body.step);
@@ -261,6 +286,10 @@ export default {
         else if (message.body.kind === "work_feeds") await (await import("./work.js")).checkFeeds(env, haneulSays);
         else if (message.body.kind === "outreach_nudge") await outreachNudge(env, haneulSays);
         else if (message.body.kind === "app_video") await onVideo({ app_file: message.body.file, caption: message.body.caption || "" }, env);
+        else if (message.body.kind === "tracker_sync") await (await import("./tracker.js")).syncTracker(env);
+        else if (message.body.kind === "tks_sync") await (await import("./tkslife.js")).tksSync(env, haneulSays);
+        else if (message.body.kind === "tks_backfill") await (await import("./tkslife.js")).tksBackfill(env, message.body);
+        else if (message.body.kind === "braindates_sync") await (await import("./tracker.js")).syncBraindates(env);
         else if (message.body.kind === "notion_sync") {
           await env.DB.put("notion_sync_started", new Date().toISOString());
           const r = await runNotionSync(env);
@@ -283,5 +312,7 @@ export default {
   // Runs every 5 minutes (see [triggers] in wrangler.toml).
   async scheduled(controller, env, ctx) {
     ctx.waitUntil(runReminders(env));
+    ctx.waitUntil((async () => (await import("./keys.js")).ensureTelegramWebhook(env))().catch((err) => console.error("webhook:", err.message)));
+    ctx.waitUntil((async () => (await import("./phoneping.js")).screenNudge(env))().catch((err) => console.error("phone nudge:", err.message)));
   },
 };

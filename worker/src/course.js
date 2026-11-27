@@ -1,6 +1,6 @@
 import { addDaysISO, localHour, todayISO } from "./dates.js";
 
-// ---------- AP Physics 1A (online school online course): finish Semester A by the deadline ----------
+// ---------- AP Physics 1A (online school course): finish Semester A by the deadline ----------
 // The course's modules (from Canvas) are turned into tasks: one per lesson (Engage → Explain → Elaborate
 // → practice quiz), one per graded assignment, exam prep and the proctored exams. Every day Haneul spreads
 // what's LEFT over the days that are left (weekends lighter, Dec 24-25 off), so the plan always fits the

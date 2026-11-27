@@ -13,6 +13,7 @@ import { runSlack } from "./slack.js";
 import { runVelocity } from "./velocity.js";
 import { READING_HOUR, READING_MINUTE } from "./reading.js";
 import { runWorkout } from "./workout.js";
+import { runNewsletter } from "./newsletter.js";
 import { SPACE_BLOCK } from "./space.js";
 import { send } from "./telegram.js";
 import { formatTodos, getTodos } from "./todos.js";
@@ -37,7 +38,7 @@ export async function startGithubJob(env, workflow, inputs) {
       Authorization: `Bearer ${env.GITHUB_TOKEN}`,
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "haneul",
+      "User-Agent": "HaneulBot/1.0",
     },
     body: JSON.stringify(inputs ? { ref: "main", inputs } : { ref: "main" }),
   });
@@ -188,12 +189,18 @@ export async function runReminders(env) {
     if (hm >= qAt && hm < qAt + 30) await once("qotd_date", () => env.BG_JOBS.send({ kind: "qotd" }));
     if (hm >= sAt && hm < sAt + 30) await once("sat_date", () => env.BG_JOBS.send({ kind: "sat" }));
   }
-  // LinkedIn + X drafts (school days 15:45, weekends 12:00) and the weekly article idea (Sundays 15:00)
+  // LinkedIn sign-in expiry heads-up (~60-day tokens), once a day at 9:00
+  if (hm >= 9 * 60 && hm < 9 * 60 + 30) await once("li_expiry_date", async () => (await import("./lipost.js")).liExpiryNudge(env).catch(() => {}));
+  // LinkedIn + X drafts (school days 15:45, weekends 12:00)
   {
     const sAt = ["Sat", "Sun"].includes(localWeekday()) ? 12 * 60 : 15 * 60 + 45;
     if (hm >= sAt && hm < sAt + 30) await once("social_date", () => env.BG_JOBS.send({ kind: "social" }));
-    if (localWeekday() === "Sun" && hm >= 15 * 60 && hm < 15 * 60 + 30) await once("weekly_article_date", () => env.BG_JOBS.send({ kind: "weekly_article" }));
   }
+  // Focus sessions that ran out get logged; 15 min after a 1:1 ends, the 3 debrief questions
+  await (await import("./focus.js")).runFocus(env).catch((err) => console.error("focus:", err.message));
+  await (await import("./debrief.js")).runDebrief(env).catch((err) => console.error("debrief:", err.message));
+  // Weekly newsletter: Thursday draft, Saturday edit nudge, Sunday send nudge, next-topic plan
+  await runNewsletter(env, hm).catch((err) => console.error("newsletter:", err.message));
   // AP Physics course (Semester A plan): today's work at the start of homework time, a check-in later
   {
     const wkend = ["Sat", "Sun"].includes(localWeekday());
@@ -215,12 +222,23 @@ export async function runReminders(env) {
     await once("reading_date", () => env.BG_JOBS.send({ kind: "reading" }));
   }
 
+  // TKS.life every 30 min (keeps its sign-in fresh too): braindate logs, high-five drafts, open braindates.
+  {
+    const slot = `${todayISO()}T${localHour()}:${localMinute() < 30 ? 0 : 1}`;
+    if ((await env.DB.get("tks_slot")) !== slot && (await env.DB.get("tks_auth"))) {
+      await env.DB.put("tks_slot", slot);
+      await env.BG_JOBS.send({ kind: "tks_sync" }, { delaySeconds: 30 });
+    }
+  }
+
   // Notion: hourly two-way memory sync (+ a one-time copy of older data), in the background queue.
   if (localMinute() >= 20) {
     const slot = `${todayISO()}T${localHour()}`;
     if ((await env.DB.get("notion_sync_slot")) !== slot) {
       await env.DB.put("notion_sync_slot", slot);
       await env.BG_JOBS.send({ kind: "notion_sync" });
+      await env.BG_JOBS.send({ kind: "tracker_sync" }, { delaySeconds: 120 }); // Networking Tracker, in its own run (50-request limit)
+      await env.BG_JOBS.send({ kind: "braindates_sync" }, { delaySeconds: 240 }); // Braindate Tracker (TKS Connections page)
     }
   }
 

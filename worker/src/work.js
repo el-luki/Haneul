@@ -9,7 +9,10 @@ import { rememberMany } from "./memory.js";
 //  3. the Outreach tab → Settings → Your work (add or remove by hand).
 // Stored in KV "work": [{ id, kind: "article" | "project", title, url, note, status, date, source }].
 
-export const DEFAULT_FEEDS = []; // e.g. ["https://YOUR-NAME.substack.com/feed"]; more can be added in the app
+// His Substack lives in KV "substack_feed" (set with /substack <link> or Mentors → Settings); other places
+// he publishes (Medium…) in KV "work_feeds". (The old example.substack.com address stopped existing.)
+export const DEFAULT_FEEDS = [];
+const FEED_BROKEN_MS = 24 * 3600000; // a feed failing this long → Haneul tells him once
 const norm = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/\p{M}/gu, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
 export async function getWork(env) {
@@ -72,7 +75,20 @@ export function feedItems(xml) {
 }
 
 export async function feedList(env) {
-  return [...DEFAULT_FEEDS, ...((await env.DB.get("work_feeds", "json")) || [])];
+  const substack = await env.DB.get("substack_feed");
+  return [...new Set([...(substack ? [substack] : []), ...DEFAULT_FEEDS, ...((await env.DB.get("work_feeds", "json")) || [])])];
+}
+
+// Any way he gives his Substack ("name", name.substack.com, a post link, a custom domain) → its feed URL.
+export function substackFeedUrl(s) {
+  s = String(s || "").trim().replace(/^@/, "");
+  if (!s) return "";
+  if (/^[a-z0-9-]+$/i.test(s)) return `https://${s.toLowerCase()}.substack.com/feed`;
+  let u;
+  try { u = new URL(/^https?:\/\//i.test(s) ? s : `https://${s}`); } catch { return ""; }
+  if (/(^|\.)substack\.com$/i.test(u.hostname) && u.hostname.toLowerCase() !== "substack.com") return `https://${u.hostname.toLowerCase()}/feed`;
+  if (u.hostname.toLowerCase() === "substack.com") return ""; // a profile page, not a publication
+  return `${u.origin}/feed`; // custom domain
 }
 
 // A Medium username, "@name" or a feed/profile link → a feed URL.
@@ -83,17 +99,46 @@ export function toFeedUrl(s) {
   if (medium) return `https://medium.com/feed/${medium[1].startsWith("@") ? medium[1] : "@" + medium[1]}`;
   const sub = s.match(/^https?:\/\/([\w-]+)\.substack\.com/i);
   if (sub) return `https://${sub[1]}.substack.com/feed`;
-  return /^https?:\/\//.test(s) ? s : "";
+  if (!/^https?:\/\//.test(s)) return "";
+  return /\/(feed|rss)(\.xml)?\/?$|\.xml$/i.test(s) ? s : s.replace(/\/(p\/.*)?$/, "").replace(/\/$/, "") + "/feed";
+}
+
+export async function onSubstackCommand(env, arg) {
+  const { send } = await import("./telegram.js");
+  const cur = await env.DB.get("substack_feed");
+  if (!String(arg || "").trim()) return send(env, cur ? `📰 I watch your Substack at ${cur.replace(/\/feed$/, "")}. To change it: /substack <link>` : "📰 I don't know your Substack yet. Send /substack <your Substack link or name>.");
+  const feed = substackFeedUrl(arg);
+  if (!feed) return send(env, "That doesn't look like a Substack. Send the link to your publication (like https://name.substack.com) or one of your posts.");
+  const res = await fetch(feed, { headers: { "User-Agent": "Mozilla/5.0 (Haneul)" }, signal: AbortSignal.timeout(15000) }).catch(() => null);
+  const n = res?.ok ? feedItems(await res.text()).length : -1;
+  if (n < 0) return send(env, `I couldn't open ${feed} (${res ? res.status : "no answer"}). Check the link and send it again.`);
+  await env.DB.put("substack_feed", feed);
+  const health = (await env.DB.get("work_feeds_health", "json")) || {};
+  for (const k of Object.keys(health)) if (/substack/i.test(k)) delete health[k];
+  await env.DB.put("work_feeds_health", JSON.stringify(health));
+  await env.DB.delete("work_feed_slot"); // read it on the next run
+  return send(env, `📰 Got it: I'm watching ${feed.replace(/\/feed$/, "")} (${n} post${n === 1 ? "" : "s"} there). New posts mark your newsletter issue as sent.`);
 }
 
 // Every few hours: new posts → his work list + memory, and Haneul says something about it.
 // The first time a feed is read, its old posts are added quietly (no message).
 export async function checkFeeds(env, haneulSays) {
   const seen = (await env.DB.get("work_feeds_seen", "json")) || {};
+  const health = (await env.DB.get("work_feeds_health", "json")) || {};
   const fresh = [];
   for (const feed of await feedList(env)) {
     const res = await fetch(feed, { headers: { "User-Agent": "Mozilla/5.0 (Haneul)" }, signal: AbortSignal.timeout(15000) }).catch(() => null);
-    if (!res?.ok) continue;
+    if (!res?.ok) {
+      const h = (health[feed] ||= { since: Date.now() });
+      h.status = res ? res.status : "no answer";
+      if (!h.told && Date.now() - h.since > FEED_BROKEN_MS) {
+        h.told = true;
+        const { send } = await import("./telegram.js");
+        await send(env, `📰 I can't read ${feed.replace(/^https?:\/\//, "").replace(/\/feed$/, "")} (${h.status === 404 ? "it says Not Found" : `error ${h.status}`}) since yesterday, so I won't notice new posts there. Did it move? Send /substack <your Substack link> (or fix it in Mentors → Settings).`).catch(() => {});
+      }
+      continue;
+    }
+    delete health[feed];
     const items = feedItems(await res.text()).slice(0, 20);
     const first = !seen[feed];
     const added = await addWork(env, items.map((i) => ({ ...i, kind: "article" })), "feed");
@@ -101,6 +146,9 @@ export async function checkFeeds(env, haneulSays) {
     if (!first) fresh.push(...added);
   }
   await env.DB.put("work_feeds_seen", JSON.stringify(seen));
+  await env.DB.put("work_feeds_health", JSON.stringify(health));
+  await (await import("./progress.js")).checkGithub(env, haneulSays).catch((err) => console.error("github progress:", err.message));
+  if (fresh.length) await (await import("./newsletter.js")).markSentFromPosts(env, fresh).catch((err) => console.error("newsletter sent:", err.message));
   if (fresh.length && haneulSays) {
     await haneulSays(env, `You just noticed Alex published something new: ${fresh.map((w) => `"${w.title}"`).join(", ")}.
 React like a proud friend in 1-2 short texts (you saw it on his feed): congratulate him, maybe ask one question about it. Don't paste the link.`);

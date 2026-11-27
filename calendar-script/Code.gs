@@ -1,5 +1,5 @@
 /**
- * Claude Administrator: add events to your Google Calendar from Telegram.
+ * Haneul: add events to your Google Calendar from Telegram.
  *
  * This runs inside YOUR personal Google account (Google Apps Script, free),
  * so the bot never gets your Google password or a Google login token.
@@ -23,7 +23,7 @@ function doPost(e) {
     if (body.secret !== SECRET) return reply({ ok: false, error: "unauthorized" });
 
     const calendar = CalendarApp.getDefaultCalendar();
-    const MARK = "Added from Telegram (Claude Administrator)";
+    const MARK = "Added from Telegram (Claude Administrator)"; // old name kept on purpose: it finds events added before the rename
 
     // Remove all-day events THIS script made (title starts with body.prefix), e.g. to re-place them at a time.
     if (body.action === "delete_all_day") {

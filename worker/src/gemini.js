@@ -4,7 +4,7 @@ import { HiccupError } from "./telegram.js";
 
 // ---------- Gemini ----------
 
-export async function gemini(env, contents, { system, json, models = MODELS_LIGHT, tools, lowMedia } = {}) {
+export async function gemini(env, contents, { system, json, models = MODELS_LIGHT, tools, lowMedia, sources } = {}) {
   const body = { contents };
   if (system) body.systemInstruction = { parts: [{ text: system }] };
   body.generationConfig = {};
@@ -42,6 +42,7 @@ export async function gemini(env, contents, { system, json, models = MODELS_LIGH
           .trim();
         if (text) {
           await recordGemini(env, model, "ok");
+          if (sources) for (const g of data.candidates?.[0]?.groundingMetadata?.groundingChunks || []) if (g.web?.uri) sources.push({ title: g.web.title || "", url: g.web.uri });
           return text;
         }
         lastError = `${model}: empty answer`;

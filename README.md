@@ -21,10 +21,14 @@ Everything runs on free tiers: a **Cloudflare Worker** (+ KV, D1 and Queues), **
 | 📅 Schedule | Calendar sync, reminders before events, morning brief, "what's coming up this week" answers, tasks placed into free calendar slots |
 | ✅ To-dos | From chat, from a photo of the school agenda, from Google Classroom, from TKS Velocity challenges in Notion |
 | 📚 Study | A semester plan for an online course (tasks spread over the days left, check-ins, behind-pace warnings), a daily SAT practice question, a question of the day, Korean words in chat |
-| 🤝 Outreach | Mentor CRM: ranks contacts, researches them (news + Hunter.io email finder), drafts cold emails / booking notes / LinkedIn notes, sends approved emails from your Gmail, watches for replies, finds new mentors in the news |
+| 🤝 Outreach | Mentor CRM: ranks contacts, researches them (web search via Tavily, every fact tied to its source; Hunter.io email finder), drafts cold emails / booking notes / LinkedIn notes, sends approved emails from your Gmail, watches for replies, finds new mentors in the news |
 | 🌐 Networking | Daily LinkedIn + X post drafts from your real work, weekly article outline, posting streak |
 | 🎧 Music | Spotify: knows what you're playing, builds focus playlists, sings along (no lyrics reproduced), weekly "wrapped" |
-| 📵 Focus | Blocks social media and games through MacroDroid; Haneul unlocks apps for a reason and sends a weekly report |
+| 📵 Focus | Blocks social media and games through MacroDroid (only during important calendar events or a focus session); Haneul unlocks apps for a reason and sends a weekly report; timed focus sessions with a playlist |
+| 📱 Phone | Screen time from MacroDroid, a put-it-down nudge after long stretches, "ring my phone" and "send to phone" (notes, links, images) from the PC |
+| 📰 Newsletter | A weekly Substack newsletter plan: issue calendar, drafts from the week's real work, privacy rules |
+| 📈 Week in review | Focus minutes, outreach, posts, GitHub progress and phone time in one sheet; mentor-call debriefs |
+| 🖥️ Station | A desk display mode for an old phone or laptop screen, plus an Arduino face module (eyes, mood light, chime) |
 | 🏃 Habits | Workouts fitted into the calendar, reading buddy, journal, habit check-ins, reading log |
 
 ## How it fits together
@@ -32,7 +36,7 @@ Everything runs on free tiers: a **Cloudflare Worker** (+ KV, D1 and Queues), **
 ```
 Telegram ─┐                         ┌─ Gemini (chat, vision, TTS, Live)
 App (PWA) ┼─► Cloudflare Worker ────┼─ Notion (notes, memory, challenges)
-MacroDroid┘   (KV · D1 · Queues ·   ├─ Spotify · Hunter.io · Google News
+MacroDroid┘   (KV · D1 · Queues ·   ├─ Spotify · Hunter.io · Tavily · Google News
               5-min cron)           └─ Apps Scripts (Calendar, Gmail, Classroom)
                      ▲
 GitHub Actions ──────┘ (morning brief, calendar sync, weekly review, backups)
@@ -41,9 +45,10 @@ GitHub Actions ──────┘ (morning brief, calendar sync, weekly revie
 - `worker/src/`: the Worker, one file per feature (`chat.js` is the personality and actions,
   `outreach.js` the mentor CRM, `course.js` the study planner, `social.js` the post drafts…)
 - `worker/app/index.html`: the whole web app (one file: chat, calls, panels, service worker)
-- `worker/test/run.js`: ~290 checks, run with `cd worker && npm test`
+- `worker/test/run.js`: ~420 checks, run with `cd worker && npm test`
 - `telegram-calendar-bot/`: Python jobs for GitHub Actions (brief, calendar sync, reviews)
 - `calendar-script/`, `gmail-script/`, `classroom-script/`: Google Apps Scripts
+- `station/`: the desk display (Arduino sketch + a small USB bridge)
 - `docs/`: setup notes (e.g. the MacroDroid focus macro)
 
 ## Design notes

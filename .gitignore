@@ -11,3 +11,9 @@ __pycache__/
 node_modules/
 .wrangler/
 .dev.vars
+
+# Haneul Station bridge: holds the device key
+station/bridge/config.json
+
+# keys to copy by hand (phone key, new worker secret); never commit
+secrets/

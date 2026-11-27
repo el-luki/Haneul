@@ -8,7 +8,7 @@ import { send } from "./telegram.js";
 // or on /slack: priority first (VIPs, DMs, availability questions with a reply draft),
 // builders with similar interests, important thread replies, then the rest by channel.
 
-export const VIP_CHANNELS = ["cohort-general", "announcements", "director-velocity"];
+export const VIP_CHANNELS = ["cohort-general", "announcements", "i-jordan-velocity"];
 export const VIP_PEOPLE = [/jordan/i];
 export const BUILDER_CHANNELS = ["builders-feedback", "i-ml-life"];
 export const DIGEST_TIMES = { weekday: { hour: 15, minute: 5 }, weekend: { hour: 12, minute: 0 } };
@@ -63,7 +63,7 @@ export function digestTask(items, sinceLabel) {
     `${m.channel ? `#${m.channel}` : "direct"} | ${m.title} | ${m.text}`;
   return `Alex just got on the bus and his TKS Slack exploded. Catch him up on everything since ${sinceLabel}.
 Below are ALL his Slack notifications (time | tags | where | title | message). [VIP] = Jordan, #cohort-general,
-#announcements, #director-velocity, or a DM. [BUILDERS] = #builders-feedback (people share what they built) and
+#announcements, #i-jordan-velocity, or a DM. [BUILDERS] = #builders-feedback (people share what they built) and
 #i-ml-life (braindate reports, life updates). [THREAD] = probably a reply in a thread.
 
 Write the catch-up as Haneul. It must be FUN: react like a friend (gasp, tease him, joke about the chaos,

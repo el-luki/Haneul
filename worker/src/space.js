@@ -30,7 +30,7 @@ export async function runSpaceArticle(env) {
   await typing(env);
   const history = (await env.DB.get("space_history", "json")) || [];
   const lists = await Promise.all(
-    SPACE_FEEDS.map((u) => fetch(u, { headers: { "User-Agent": "haneul" } }).then((r) => (r.ok ? r.text() : "")).then(rssItems).catch(() => []))
+    SPACE_FEEDS.map((u) => fetch(u, { headers: { "User-Agent": "HaneulBot/1.0" } }).then((r) => (r.ok ? r.text() : "")).then(rssItems).catch(() => []))
   );
   const fresh = lists.flatMap((l) => l.slice(0, 8)).filter((it) => !history.includes(it.link));
   if (!fresh.length) return send(env, "🚀 Couldn't reach the space news sites right now. Try /space later.");

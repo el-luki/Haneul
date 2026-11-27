@@ -152,7 +152,7 @@ at 17:30 if some are still open. With 📅, each task goes into a free spot in y
     title: "💼 TKS Slack catch-up",
     body: `I quietly collect your Slack notifications all day (forwarded by MacroDroid), then catch you up
 on the bus: weekdays 15:05, weekends 12:00. Or any time: /slack
-⭐ Priority: Jordan, #cohort-general, #announcements, #director-velocity and every DM
+⭐ Priority: Jordan, #cohort-general, #announcements, #i-jordan-velocity and every DM
    (if someone asks about your availability, I draft a reply using your calendar)
 🔭 Builders: people in #builders-feedback and #i-ml-life doing stuff close to your interests
 🧵 Important thread replies · then everything else, one line per channel
@@ -166,7 +166,7 @@ I only see what Slack notifies you about, so set Slack to notify you for all mes
 💡 Ideas table: everything from /note, voice ideas and link summaries
 📖 Reading table: a row each time you /read; write your own notes on a chapter there and I react to them
 📓 Journal table: your nightly answers
-📰 Newsletter Drafts table: the monthly Substack draft, ready to edit
+📰 Newsletter Drafts table: the weekly issue drafts and the monthly TKS update, ready to edit
 🧠 Memory table: everything I remember about you. Edit or delete a row and I update within an hour;
    add your own row and I learn it
 📔 Chat Diary table: my nightly summary of what we talked about
@@ -233,6 +233,46 @@ I send one article picked for you (SpaceNews, NASASpaceflight, Spaceflight Now, 
 with a 3-point summary, why it's worth it, and a question to think about.
 /space: get one right now (never repeats an article).`,
   },
+  focus: {
+    title: "🎯 Focus sessions",
+    body: `/focus 45 AP physics: a 45-minute focus session (any length 5-180; the words say what it's for)
+While it runs: your focus playlist plays on Spotify (if it's open), I hold my random texts,
+and distracting apps are blocked on your phone.
+At the end the minutes are logged (AP Physics minutes also go to your AP log) and I check in.
+/focus: how long is left · /focus stop: end early · /focus playlist <Spotify link>: pick the music
+In the app: the Focus card in Today (desktop) or my menu → Focus (phone).`,
+  },
+  phonefocus: {
+    title: "📵 Phone focus",
+    body: `MacroDroid asks me before opening social media or games. I block them ONLY while something important is on:
+an important event on your calendar right now (classes, homework/study blocks, TKS sessions, 1:1s and braindates,
+meetings, events, newsletter time) or a focus session. Lunch, the bus, routines and small Velocity to-dos don't count.
+Need an app during those times? Ask me in chat with a reason and I'll unlock it for a few minutes.
+Screen time: two more MacroDroid macros (Screen On → the same link + &screen=on, Screen Off → &screen=off) let me
+count your phone time, unlocks and longest session. It shows in Today, the week review and the Sunday report.`,
+  },
+  progress: {
+    title: "🛠️ Build in public (GitHub)",
+    body: `Every few hours I read the public activity of your whole GitHub account, so new projects are picked up on their own.
+Pushes become progress notes (commit messages + the files that changed), and new repos go to your work list.
+The notes fill "this week's progress" in your Thursday newsletter draft and show up in your week review.`,
+  },
+  debrief: {
+    title: "🤝 After a mentor chat",
+    body: `15 minutes after a 1:1 on your calendar ends ("Name and Alex Rivera"), I ask 3 things:
+what you learned, what surprised you, what you'll try. Reply to that message (text or voice).
+I save it for your "Collaborate in public" newsletter issues and draft a thank-you note for you to send yourself.`,
+  },
+  newsletter: {
+    title: "📰 Weekly newsletter",
+    body: `Your Substack goes out every Sunday. Each issue: a hook, why it works, this week's progress, one ask.
+Thursday 16:30: I write a first draft of Sunday's issue (Notion → Newsletter Drafts, and Mentors → Posts in the app)
+Saturday 10:00: a nudge to edit it · Sunday 17:00: a nudge to send it (only if it isn't out yet)
+When you publish, I notice it on your Substack feed and mark the issue sent (/substack <link> tells me where your Substack is).
+When fewer than 2 issues are planned, I suggest the next one on Sunday at 15:00.
+/newsletter: the calendar · /newsletter draft · plan · sent · skip · name <name>
+The big monthly TKS update (/monthly) is separate: a recap of the month, built from these issues.`,
+  },
   monthly: {
     title: "📰 Monthly TKS update",
     body: `On the last day of each month at ${MONTHLY_HOUR}:00 I write a FIRST DRAFT of your Substack newsletter,
@@ -279,6 +319,7 @@ Examples: "when am I free tomorrow?", "help me plan my homework tonight", "expla
 🎧 Fridays ${MUSIC_HOUR}:00: weekly music
 🗓️ Sundays ${REVIEW_HOUR}:00: weekly review
 🚀 Before your Space Tech reading block: article of the day
+📰 Thursdays 16:30: newsletter draft · Sat 10:00 edit nudge · Sun 17:00 send nudge
 📰 Last day of the month ${MONTHLY_HOUR}:00: monthly TKS update draft
 💬 Any time: important WhatsApp messages
 💾 Sundays 4:00: backup (silent) · 🩺 health alerts only if something breaks`,
@@ -312,7 +353,9 @@ export const HELP_ALIASES = {
   challenge: "velocity", reto: "velocity", retos: "velocity",
   hint: "tutor", hints: "tutor", problem: "tutor", problema: "tutor", math: "tutor", matematicas: "tutor",
   rocket: "space", articulo: "space", article: "space",
-  newsletter: "monthly", substack: "monthly", month: "monthly", mes: "monthly",
+focus: "focus", enfoque: "focus", pomodoro: "focus", phone: "phonefocus", macrodroid: "phonefocus", block: "phonefocus", apps: "phonefocus",
+  github: "progress", commits: "progress", progress: "progress", mentor: "debrief", braindate: "debrief", thanks: "debrief",
+  newsletter: "newsletter", substack: "newsletter", weekly: "newsletter", boletin: "newsletter", "boletín": "newsletter", month: "monthly", mes: "monthly",
   automatic: "auto", schedule: "auto", horario: "auto",
 };
 
@@ -334,7 +377,8 @@ export function helpOverview() {
 🏃 Workout: /workout · /workout done
 📖 Reading: /reading · /read 5 · /book <title>
 🧑‍🏫 Homework tutor: photo → 🧑‍🏫, or /hint <problem>
-🗓️ Sunday review: /review · 📰 Monthly TKS draft: /monthly
+🗓️ Sunday review: /review · 📰 Newsletter: /newsletter · Monthly TKS draft: /monthly
+🎯 Focus: /focus 45 AP physics · /focus stop
 📘 AP Physics: /ap · /ap plan · /ap 45 · /ap done 1
 🎧 Music: /music · /np · /spotify
 💬 WhatsApp: /wa · /words · /smart
@@ -349,7 +393,8 @@ More detail on any topic:
 /help todos · /help photos · /help calendar · /help weather
 /help velocity · /help notion · /help slack · /help workout · /help reading · /help tutor · /help habits · /help journal · /help memory · /help korean · /help status
 /help classroom · /help ideas · /help voice · /help links · /help events
-/help space · /help review · /help monthly · /help ap
+/help space · /help review · /help newsletter · /help monthly · /help ap
+/help focus · /help phone · /help github · /help mentor
 /help music · /help whatsapp · /help chat · /help auto
 
 Or just ask me, e.g. "how do I log AP study time?"
@@ -395,6 +440,8 @@ export const MENU_COMMANDS = [
   { command: "review", description: "Weekly review now" },
   { command: "event", description: "Add an event to your calendar" },
   { command: "space", description: "Space-tech article now" },
+  { command: "newsletter", description: "Weekly newsletter: calendar and drafts" },
+  { command: "focus", description: "Start a focus session (e.g. /focus 45 AP physics)" },
   { command: "monthly", description: "Monthly TKS update draft" },
   { command: "ap", description: "AP Physics status" },
   { command: "music", description: "This week's music picks" },

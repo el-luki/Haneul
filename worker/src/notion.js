@@ -21,7 +21,7 @@ export function pageIdFrom(link) {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`.toLowerCase();
 }
 
-async function notion(env, method, path, body) {
+export async function notion(env, method, path, body) {
   let last = "";
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt) await new Promise((r) => setTimeout(r, 1500 * attempt));
@@ -391,5 +391,9 @@ export async function notionPage(env, id) {
     .map(([k, p]) => [k, String(plainProp(p))])
     .filter(([, v]) => v);
   const title = titleOf(page) || "Untitled";
-  return { title, url: page.url, fields, text: (await pageText(env, id)).slice(0, 20000) };
+  // sub-pages and tables inside it (pageText skips them), so a page holding only a table isn't "empty"
+  const kids = ((await notion(env, "GET", `/blocks/${id}/children?page_size=100`).catch(() => ({}))).results || [])
+    .filter((b) => b.type === "child_page" || b.type === "child_database")
+    .map((b) => ({ id: b.id, kind: b.type === "child_page" ? "page" : "table", title: b[b.type].title || "Untitled", url: pageUrl(b.id) }));
+  return { title, url: page.url, fields, text: (await pageText(env, id)).slice(0, 20000), children: kids };
 }

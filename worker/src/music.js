@@ -10,7 +10,7 @@ import { send, typing } from "./telegram.js";
 // Every Friday at MUSIC_HOUR: new releases (last 14 days) from the artists you
 // listen to most, plus ~12 picks Gemini chooses from your taste. Every pick is
 // checked against Spotify search (so no made-up songs) and saved into a private
-// playlist "Weekly Picks · Claude Administrator".
+// playlist "Weekly Picks · Haneul".
 //
 // Note: Spotify no longer gives new apps its own recommendation API, which is why
 // Gemini picks the songs and Spotify only confirms they exist.

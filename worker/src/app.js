@@ -2,7 +2,7 @@ import { BADGE_96, ICON_192, ICON_512, ICON_MASKABLE } from "../app/icons.js";
 import { skyNow } from "./weather.js";
 import { saveFound } from "./agenda.js";
 import { buildSystem } from "./chat.js";
-import { localHour, localMinute, todayISO } from "./dates.js";
+import { daysBetween, localHour, localMinute, todayISO } from "./dates.js";
 import { createCalendarEvent } from "./events.js";
 import { gemini, geminiDelete, geminiFileReady, geminiUpload, parseJson } from "./gemini.js";
 import { logChatDay, rememberMany } from "./memory.js";
@@ -157,10 +157,23 @@ export async function appRoutes(request, env, url) {
     if (p === "/app/icon-512.png") return png(ICON_512);
     if (p === "/app/icon-maskable.png") return png(ICON_MASKABLE);
     if (p === "/app/badge.png") return png(BADGE_96);
+    // The NASA background photos, served from Haneul's own address: images-assets.nasa.gov sends no CORS header,
+    // so WebGL (the PC liquid glass) can't sample them directly. Only the three backgrounds, cached a week.
+    const nasa = p.match(/^\/app\/nasa\/(iss073e0982261|iss072e159172|iss067e141213)\.jpg$/);
+    if (nasa) {
+      const cache = caches.default, key = new Request(url.toString());
+      const hit = await cache.match(key);
+      if (hit) return hit;
+      const r = await fetch(`https://images-assets.nasa.gov/image/${nasa[1]}/${nasa[1]}~large.jpg`);
+      if (!r.ok) return new Response("not found", { status: 404 });
+      const res = new Response(r.body, { headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=604800" } });
+      await cache.put(key, res.clone()).catch(() => {});
+      return res;
+    }
   }
   if (!p.startsWith("/app/api/")) return new Response("not found", { status: 404 });
   const route = p.slice("/app/api/".length);
-  const GETS = ["history", "feed", "latest", "audio", "notion", "settings", "now", "profile", "ringing", "outreach", "today", "bgimg", "sky", "bible", "course", "social"];
+  const GETS = ["setup", "week", "focus", "phone", "history", "feed", "latest", "audio", "notion", "settings", "now", "profile", "ringing", "outreach", "today", "bgimg", "sky", "bible", "course", "social", "social/xcheck", "tks"];
   if (request.method !== (GETS.includes(route) ? "GET" : "POST")) return new Response("method not allowed", { status: 405 });
 
   if (route === "login/start") return loginStart(env);
@@ -183,10 +196,36 @@ export async function appRoutes(request, env, url) {
     if (route === "profile") return json(await profile(env));
     if (route === "today") return json(await todayPanel(env));
     if (route === "course") { const m = await import("./course.js"); const c = await m.getCourse(env); return json(c ? { course: c, plan: m.coursePlan(c) } : { course: null }); }
-    if (route === "social") { const m = await import("./social.js"); const s = await m.getSocial(env); return json({ ...s, today: todayISO(), streak: m.socialStreak(s), streakX: m.socialStreak(s, todayISO(), "x") }); }
+    if (route === "social") { const m = await import("./social.js"); const s = await m.getSocial(env); const { xReady } = await import("./xpost.js"); const { liStatus } = await import("./lipost.js"); return json({ ...s, today: todayISO(), streak: m.socialStreak(s), streakX: m.socialStreak(s, todayISO(), "x"), xReady: xReady(env) && (await env.DB.get("x_mode")) !== "share", xShareMode: xReady(env) && (await env.DB.get("x_mode")) === "share", li: await liStatus(env), newsletter: await (await import("./newsletter.js")).getNewsletter(env) }); }
+    if (route === "week") return json(await (await import("./week.js")).weekStats(env));
+    if (route === "setup") return json(await setupSteps(env));
+    if (route === "setup/spotify") { const { spotifyConnectLink } = await import("./music.js"); await spotifyConnectLink(env); return json({ ok: true }); }
+    if (route === "focus") return json({ focus: await (await import("./focus.js")).getFocus(env) });
+    if (route === "focus/start") { const f = await (await import("./focus.js")).startFocus(env, { minutes: body.minutes, label: body.label }); return json({ focus: f }); }
+    if (route === "focus/stop") return json(await (await import("./focus.js")).stopFocus(env));
+    if (route === "phone") return json({ nudge: await (await import("./phoneping.js")).nudgeMinutes(env), screenOn: !!(await env.DB.get("screen_setup")) });
+    if (route === "phone/ping") return json(await (await import("./phoneping.js")).pingPhone(env));
+    if (route === "phone/send") return json(await (await import("./phoneping.js")).sendToPhone(env, body));
+    if (route === "phone/nudge") return json(await (await import("./phoneping.js")).setNudge(env, body.minutes));
+    if (route === "tks") { const { tksStatus } = await import("./tkslife.js"); return json(await tksStatus(env)); }
+    if (route.startsWith("tks/")) {
+      const m = await import("./tkslife.js");
+      if (route === "tks/connect") return json(await m.tksConnect(env, body));
+      if (route === "tks/disconnect") return json(await m.tksDisconnect(env));
+      if (route === "tks/post") return json(await m.tksPost(env, body).catch((err) => ({ error: err.message })));
+      if (route === "tks/skip") return json(await m.tksSkip(env, body));
+      if (route === "tks/sync") { await env.BG_JOBS.send({ kind: "tks_sync" }); return json({ queued: true }); } // drafts take ~30 s
+      if (route === "tks/backfill") { const { tksBackfill } = await import("./tkslife.js"); return json(await tksBackfill(env)); } // first batch now, the rest in the background
+    }
+    if (route === "social/x_mode") { if (body.mode === "api") await env.DB.delete("x_mode"); else await env.DB.put("x_mode", "share"); return json({ ok: true }); }
+    if (route === "social/li_start") { const { liStart } = await import("./lipost.js"); return json(await liStart(env)); }
+    if (route === "social/unpost") { const { unmarkPosted } = await import("./social.js"); return json(await unmarkPosted(env, body)); }
+    if (route === "social/lipost") { const { approveLinkedIn } = await import("./social.js"); return json(await approveLinkedIn(env, body)); }
+    if (route === "social/xcheck") { const { xWhoAmI } = await import("./xpost.js"); return json(await xWhoAmI(env)); }
+    if (route === "social/xpost") { const { approveX } = await import("./social.js"); return json(await approveX(env, body)); }
     if (route === "social/posted") { const { markPosted } = await import("./social.js"); return json(await markPosted(env, body)); }
     if (route === "social/text") { const { saveSocialText } = await import("./social.js"); return json(await saveSocialText(env, body)); }
-    if (route === "social/new") { await env.BG_JOBS.send({ kind: "social_new" }); return json({ queued: true }); }
+    if (route === "social/new") { const { draftSocial } = await import("./social.js"); return json({ day: await draftSocial(env, { again: true }) }); } // ~10 s: written right away
     if (route === "course/mark") { const { markCourse } = await import("./course.js"); return json({ changed: await markCourse(env, [String(body.id || "")], body.done !== false) }); }
     if (route === "course/import") { const { importCourse } = await import("./course.js"); return json(await importCourse(env, body)); }
     if (route === "bible") { const { bibleMonth } = await import("./bible.js"); return json(await bibleMonth(env, q.get("m"))); }
@@ -263,7 +302,7 @@ export async function history(env) {
 }
 
 // Background photo for the app: a NASA preset (public domain), his own photo, or none.
-export const BG_PRESETS = ["night", "aurora", "sunrise", "custom", "none"];
+export const BG_PRESETS = ["night", "aurora", "sunrise", "custom", "none", "gradient"];
 async function setBackground(env, body) {
   if (body.image) {
     const img = String(body.image);
@@ -275,6 +314,26 @@ async function setBackground(env, body) {
   if (!BG_PRESETS.includes(body.bg)) return { error: "unknown background" };
   await env.DB.put("app_bg", body.bg);
   return { ok: true, bg: body.bg };
+}
+
+// The "Set up Haneul" checklist in her menu: which connections are done (no secrets, just yes/no).
+async function setupSteps(env) {
+  const safe = (p) => p.catch(() => null);
+  const [spotify, tks, li, substack, phone, pushes] = await Promise.all([
+    safe(env.DB.get("spotify", "json")), safe(env.DB.get("tks_auth", "json")), safe((async () => (await import("./lipost.js")).liStatus(env))()),
+    safe(env.DB.get("substack_feed")), safe(env.DB.get("phone_setup")), safe(pushCount(env)),
+  ]);
+  const screen = await safe(env.DB.get("screen_setup"));
+  return { steps: [
+    { id: "push", title: "Turn on notifications", done: (pushes || 0) > 0 },
+    { id: "notion", title: "Connect Notion", done: notionReady(env) },
+    { id: "spotify", title: "Connect Spotify", done: !!spotify?.refresh_token },
+    { id: "tks", title: "Connect TKS.life", done: !!tks?.access && !tks.expired },
+    { id: "linkedin", title: "Connect LinkedIn", done: !!li?.connected },
+    { id: "substack", title: "Add your Substack", done: !!substack },
+    { id: "phone", title: "Phone focus (MacroDroid)", done: !!phone },
+    { id: "screen", title: "Screen time (MacroDroid)", done: !!screen },
+  ] };
 }
 
 async function settings(env) {
@@ -371,7 +430,21 @@ async function todayPanel(env) {
     const o = await outreachState(env).catch(() => null);
     if (o?.contacts?.length) outreach = { overview: o.overview, due: o.contacts.filter((c) => c.move?.due).slice(0, 3).map((c) => ({ id: c.id, name: c.name || c.org, org: c.org, move: c.move.t })) };
   }
-  return { date: today, now: nowHHMM, events, todos, outreach };
+  // "This week" at the bottom of the panel: the next newsletter issue and the LinkedIn streak
+  let newsletter = null, streak = null;
+  try {
+    const nm = await import("./newsletter.js");
+    const cur = nm.currentIssue(await nm.getNewsletter(env));
+    if (cur) newsletter = { n: cur.n, date: cur.date, title: cur.title, status: cur.status, days: daysBetween(today, cur.date) };
+  } catch {}
+  try {
+    const sm = await import("./social.js");
+    const s = await sm.getSocial(env);
+    streak = { linkedin: sm.socialStreak(s), postedToday: !!s.days[today]?.posted?.linkedin };
+  } catch {}
+  const focus = await (await import("./focus.js")).getFocus(env).catch(() => null);
+  const screen = (await env.DB.get("screen_setup")) ? await (await import("./screen.js")).screenDay(env).catch(() => null) : null;
+  return { date: today, now: nowHHMM, events, todos, outreach, newsletter, streak, focus, screen };
 }
 
 // ---------- Outreach tab (outreach.js) ----------
@@ -379,7 +452,7 @@ async function outreachRoute(env, route, body) {
   const id = String(body.id || "");
   const draft = Number(body.draft) || 0;
   switch (route) {
-    case "outreach": return outreachState(env);
+    case "outreach": { const { trackerStatus } = await import("./tracker.js"); return { ...(await outreachState(env)), tracker: await trackerStatus(env).catch(() => null) }; }
     case "outreach/save": return { contact: await updateContact(env, id || null, body.fields || {}) };
     case "outreach/delete": await env.FEED.prepare("DELETE FROM outreach WHERE id = ?").bind(id).run(); return { ok: true };
     case "outreach/log": {
@@ -398,6 +471,8 @@ async function outreachRoute(env, route, body) {
     case "outreach/skip": return skipContact(env, draft);
     case "outreach/prep": await env.BG_JOBS.send({ kind: "outreach_prep" }); return { queued: true }; // research + drafts take ~1 min
     case "outreach/discover": await env.BG_JOBS.send({ kind: "outreach_discover" }); return { queued: true };
+    case "outreach/discover_web": await env.BG_JOBS.send({ kind: "outreach_discover_web", want: Math.min(20, Number(body.want) || 10) }); return { queued: true };
+    case "outreach/research_all": await env.BG_JOBS.send({ kind: "outreach_research_all" }); return { queued: true };
     case "outreach/import": return importContacts(env, body.list);
     case "outreach/work_add": { const { addWork } = await import("./work.js"); return { added: await addWork(env, [body.item], "app") }; }
     case "outreach/work_del": { const { removeWork } = await import("./work.js"); return removeWork(env, body.id); }
@@ -405,6 +480,11 @@ async function outreachRoute(env, route, body) {
       const { toFeedUrl } = await import("./work.js");
       const feeds = (Array.isArray(body.feeds) ? body.feeds : []).map(toFeedUrl).filter(Boolean).slice(0, 5);
       await env.DB.put("work_feeds", JSON.stringify(feeds));
+      if (typeof body.substack === "string") {
+        const { substackFeedUrl } = await import("./work.js");
+        const sf = substackFeedUrl(body.substack);
+        if (sf) await env.DB.put("substack_feed", sf); else if (!body.substack.trim()) await env.DB.delete("substack_feed");
+      }
       await env.DB.delete("work_feed_slot"); // check them on the next cron run
       return { feeds };
     }
@@ -418,6 +498,8 @@ async function outreachRoute(env, route, body) {
       await env.DB.put("outreach_profile", JSON.stringify(p));
       return { profile: p };
     }
+    case "outreach/tracker_sync": { const { syncTracker } = await import("./tracker.js"); return syncTracker(env); }
+    case "outreach/braindates_sync": { const { syncBraindates } = await import("./tracker.js"); return syncBraindates(env); }
     case "outreach/sync": return syncGmail(env);
     case "outreach/search": await env.BG_JOBS.send({ kind: "outreach_weekly" }); return { queued: true }; // can take > 100 s
     case "outreach/sync_now": return syncGmail(env);

@@ -1,5 +1,5 @@
 /**
- * Claude Administrator: Google Classroom → Telegram bot.
+ * Haneul: Google Classroom → Telegram bot.
  *
  * Runs in your SCHOOL Google account (Google Apps Script, free). Every hour it
  * reads your Classroom assignments (read-only, as you) and sends them to the bot.

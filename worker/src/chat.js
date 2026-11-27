@@ -25,6 +25,7 @@ import { phoneContext, phoneLock, phoneUnlock } from "./phone.js";
 import { courseContext, markCourse } from "./course.js";
 import { satContext } from "./daily.js";
 import { markPosted, socialContext } from "./social.js";
+import { newsletterContext } from "./newsletter.js";
 import { velocityContext } from "./velocity.js";
 
 // ---------- Chat ----------
@@ -117,12 +118,26 @@ async function progressText(env) {
 }
 
 // Spelled out, because the small model told him to go to sleep at 18:21.
+// Far from bedtime, the prompt doesn't mention it at all: just saying "bedtime is 5 h away, don't mention it"
+// made the small model text "bedtime in 15 min" at 15:07. Before 20:00 a code guard also cuts it (stripBedtime).
+export const BEDTIME_MIN = 20 * 60 + 30;
 export function bedtimeLine(h = localHour(), m = localMinute()) {
-  const left = 20 * 60 + 30 - (h * 60 + m);
+  const now = h * 60 + m, left = BEDTIME_MIN - now;
   if (h < 5) return "BEDTIME: it's the middle of the night; he should be asleep.";
-  if (left > 90) return `BEDTIME: 20:30, still ${Math.floor(left / 60)} h ${left % 60} min away. Do NOT mention sleep or bed.`;
+  if (now < 20 * 60) return ""; // daytime: say nothing about sleep
   if (left > 0) return `BEDTIME: 20:30, in ${left} min. You may gently remind him to start winding down.`;
   return "BEDTIME: it's past his bedtime (20:30): you may tease him to go to bed.";
+}
+
+// Between 5:00 and 20:00, sentences about bed/sleep are cut from her texts (she can still talk about
+// sleep if Alex brings it up himself: then `asked` is true).
+const SLEEP_TALK = /\b(bed ?time|go(ing)? to (bed|sleep)|get some sleep|sleep (early|soon)|wind(ing)? down|lights out|hit the hay|a dormir|ve a dormir|a la cama|acu[eé]state|hora de dormir)\b/i;
+export function stripBedtime(messages, { h = localHour(), m = localMinute(), asked = false } = {}) {
+  const now = h * 60 + m;
+  if (asked || h < 5 || now >= 20 * 60) return messages;
+  return messages
+    .map((t) => String(t).split(/(?<=[.!?])\s+|\n+/).filter((s) => !SLEEP_TALK.test(s)).join(" ").trim())
+    .filter(Boolean);
 }
 
 // The whole "who Haneul is + everything she knows" prompt. `task` says what to do right now.
@@ -196,6 +211,10 @@ ${await phoneContext(env).catch(() => "")}
 ${await courseContext(env).catch(() => "")}
 ${await satContext(env).catch(() => "")}
 ${await socialContext(env).catch(() => "")}
+${await newsletterContext(env).catch(() => "")}
+${await (await import("./screen.js")).screenContext(env).catch(() => "")}
+${await (await import("./progress.js")).progressContext(env).catch(() => "")}
+${(await import("./focus.js")).focusLine(await (await import("./focus.js")).getFocus(env).catch(() => null))}
 ${await workoutContext(env)}
 ${await readingContext(env)}
 ${await velocityContext(env).catch(() => "")}
@@ -481,7 +500,7 @@ ${ANSWER_FORMAT}`, text);
   }
 
   salvageActionNotes(answer, text);
-  answer.messages = stripMarkdown(limitTailSlang(limitEmojis(answer.messages, 1)));
+  answer.messages = stripBedtime(stripMarkdown(limitTailSlang(limitEmojis(answer.messages, 1))), { asked: /\b(sleep|bed|tired|dormir|sueño|cansad)/i.test(text) });
   if (answer.remember.length) await rememberMany(env, answer.remember, "chat").catch((err) => console.error("auto-memory:", err.message));
   if (answer.actions.add_work?.length) await addWork(env, answer.actions.add_work, "chat").catch((err) => console.error("work:", err.message));
   if (answer.actions.bible?.length) await logBible(env, answer.actions.bible).catch((err) => console.error("bible:", err.message));
@@ -571,7 +590,8 @@ export async function haneulSays(env, task, { maxTexts = 4, models, maxEmojis = 
   const contents = [...history, { role: "user", parts: [{ text: "(Alex hasn't written anything new. Start the conversation as described.)" }] }];
   const answer = await askAnswer(env, contents, { system, json: true, ...(models ? { models } : {}) });
   salvageActionNotes(answer, "");
-  answer.messages = stripMarkdown(limitTailSlang(limitEmojis(answer.messages, maxEmojis)));
+  answer.messages = stripBedtime(stripMarkdown(limitTailSlang(limitEmojis(answer.messages, maxEmojis))));
+  if (!answer.messages.length) return []; // everything she wanted to say was a bedtime nag at the wrong time
   const said = answer.messages.join("\n");
   // Keep strict user/model turns in the history: merge into the last model turn if needed.
   const last = history[history.length - 1];

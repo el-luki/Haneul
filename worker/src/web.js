@@ -1,5 +1,5 @@
 // ---------- Web search (free, no key) ----------
-// Google Search grounding isn't included in Alex's free Gemini tier, so Haneul searches
+// Haneul searches
 // Google News (public RSS) for anything recent and Wikipedia for background, and answers
 // from those results.
 

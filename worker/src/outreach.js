@@ -385,18 +385,35 @@ async function prepRun(env, { max } = {}) {
   // Hunter may have marked an email invalid: whoever has no way left to reach them waits (no draft)
   for (let i = picks.length - 1; i >= 0; i--) if (channelOf(picks[i]) === "none") picks.splice(i, 1);
   if (!picks.length) return { prepared: 0, ready, done };
-  // research: recent news about each person (often none for people who aren't famous: then the bio is enough)
-  for (const c of picks.slice(0, 6)) { // news for the 6 best (Cloudflare allows ~50 outside requests per run)
-    await new Promise((r) => setTimeout(r, 1200)); // pace the searches (bursts get refused)
-    const news = await newsSearch(`"${c.name}" ${c.org}`).catch(() => []);
-    c.news = news.slice(0, 3).map((n) => `${n.title} (${n.source}, ${n.date})`);
+  // research: Gemini + Google Search checks each person is real and at that org, and finds facts about THEIR work.
+  // Someone it can't confirm gets no draft (and waits 30 days); if grounding is unavailable, news headlines as before.
+  const log = [];
+  let refused = "";
+  for (const c of picks.slice(0, 6)) {
+    const reuse = webFresh(c) && !c.web.error;
+    const g = reuse ? c.web : refused ? { error: refused } : await groundedResearch(env, c).catch((err) => ({ error: err.message }));
+    if (g.error && /HTTP 4\d\d/.test(g.error)) refused = g.error; // quota or not allowed: don't spend the run retrying
+    if (!reuse && !g.error) await saveWeb(env, c.id, g);
+    if (g.error) {
+      await new Promise((r) => setTimeout(r, 1200)); // pace the searches (bursts get refused)
+      const news = await newsSearch(`"${c.name}" ${c.org}`).catch(() => []);
+      c.news = news.slice(0, 3).map((n) => `${n.title} (${n.source}, ${n.date})`);
+      log.push({ name: c.name, grounded: false, error: g.error.slice(0, 120) });
+      continue;
+    }
+    c.grounded = g;
+    log.push({ name: c.name, grounded: true, reused: reuse, verified: g.verified, facts: g.facts.length, sources: g.sources });
   }
+  await env.DB.put("outreach_research_last", JSON.stringify({ at: Date.now(), log }), { expirationTtl: 86400 * 14 });
+  for (let i = picks.length - 1; i >= 0; i--) if (picks[i].grounded?.verified === false) picks.splice(i, 1);
+  if (!picks.length) return { prepared: 0, ready, done };
   const alex = await memoryText(env, "TKS rocket GNC propulsion landing convex project mentor").catch(() => "");
   const prompt = `Alex wants to reach out to these mentors from TKS's (The Knowledge Society) mentor network. For EACH, write his FIRST message.
 
 About Alex (facts you may use; never invent achievements, schools, numbers or projects that aren't here):
 He's an 11th-grade student in Lima, Peru, in TKS. His focus is SPACE TECH: guidance, navigation & control (GNC) and propulsion.
-His articles and projects are listed under HIS WORK (only mention those). Learning AP Physics and CS50P.
+His Learn article (Medium): "Why Landing a Rocket Is a Math Problem".
+His Build: LanderSim, a 3-DoF fuel-optimal rocket-landing simulator in Python (CVXPY). Other projects are NOT his focus: don't mention them to aerospace people. Learning AP Physics and CS50P.
 ${alex.slice(0, 2000)}
 
 Channel rules:
@@ -404,22 +421,34 @@ Channel rules:
 - "meeting": they have a TKS booking link. Write the short note he pastes in the booking form ("what would you like to discuss"):
   2-4 sentences, under 70 words, no greeting/signature. Subject = "Booking note".
 - "linkedin": a LinkedIn connection note, UNDER 280 characters, starts with "Hi <first name>,". Subject = "LinkedIn note".
-For booking and LinkedIn notes: he found them through TKS's mentor network, ONE real detail of THEIR work (from the bio/news), the same
+Facts about THEM: use ONLY "verified research" (from Google Search) and the bio. Never attribute Alex's numbers (5x/s, 7-12 ms, 0.6%) or methods
+to them, never claim they use a method unless the research says so (ask instead), never invent a role, project or field for them.
+A team contact (no person's name) is greeted "Hello <org> team,". Only say he's "working on" something listed above (LanderSim, his article).
+His article's exact title is "Why Landing a Rocket Is a Math Problem"; never invent other titles. Don't mention Haneul.
+For booking and LinkedIn notes: he found them through TKS's mentor network, ONE real detail of THEIR work (from the research/bio), the same
 kind of ultra-specific technical micro-question tied to his GNC / propulsion work, a small ask (15 minutes). No flattery, no links.
 
 Return JSON: [{"id": "...", "subject": "...", "body": "..."}]
 
 ${picks.map((c) => `--- id: ${c.id} | channel: ${channelOf(c)} | ${c.name}, ${c.title || ""} at ${c.org}
 bio: ${String(c.bio || c.orgLine || "").slice(0, 700)}
-why he picked them: ${c.notes || "-"}
+why he picked them: ${(!OFF_FOCUS.test(c.notes || "") && c.notes) || "-"}
 question idea: ${c.ask || "-"}
-recent news: ${(c.news || []).join(" | ") || "none found"}`).join("\n")}`;
+${c.grounded ? `verified research: role: ${c.grounded.role || "-"}; ${c.grounded.facts.join(" | ") || "no specific facts"}; GNC link: ${c.grounded.gnc || "-"}` : `recent news: ${(c.news || []).join(" | ") || "none found"}`}`).join("\n")}`;
   const r = parseJson(await gemini(env, [{ role: "user", parts: [{ text: prompt }] }], { json: true, models: MODELS_SMART }));
   const list = Array.isArray(r) ? r : r.drafts || r.messages || [];
   let prepared = 0;
   for (const c of picks) {
     const m = list.find((x) => x?.id === c.id);
     if (!m?.body) continue;
+    m.body = cleanDraft(m.subject, m.body);
+    if (!m.body) { // pitched an off-focus project anyway: park them a month instead of researching them again every run
+      const fresh = await getContact(env, c.id);
+      fresh.snooze = addDaysISO(todayISO(), 30);
+      fresh.flag = "Haneul could only find a BCI/neuro angle for them, not rockets/GNC: check the fit.";
+      await saveContact(env, fresh);
+      continue;
+    }
     const ch = channelOf(c);
     const kind = KIND_OF_CHANNEL[ch];
     if (!kind) continue;
@@ -429,12 +458,160 @@ recent news: ${(c.news || []).join(" | ") || "none found"}`).join("\n")}`;
       .bind(c.id, kind, to, String(m.subject || "").slice(0, 200), body, Date.now()).run();
     const fresh = await getContact(env, c.id);
     fresh.stage = "drafted";
-    if (c.news?.length) fresh.research = c.news;
+    if (c.grounded) fresh.research = c.grounded.facts;
+    else if (c.news?.length) fresh.research = c.news;
     addLog(fresh, `Haneul researched them and drafted ${ch === "email" ? "an email" : ch === "meeting" ? "a booking note" : "a LinkedIn note"}`);
     await saveContact(env, fresh);
     prepared++;
   }
   return { prepared, ready: ready + prepared, done };
+}
+
+// His BCI/EEG and app projects aren't his pitch to aerospace mentors (the prompt says so; this catches slips).
+const OFF_FOCUS = /\b(EEG|BCI|brain[- ]computer|neuro\w*|Haneul)\b/i;
+// null = drop the draft; otherwise the body with his article's real title
+export function cleanDraft(subject, body) {
+  if (OFF_FOCUS.test(`${subject} ${body}`)) return null;
+  return String(body).replace(/["“][^"”]*Convex Math[^"”]*["”]/g, '"Why Landing a Rocket Is a Math Problem"');
+}
+
+// Web search for the research: Tavily (secret TAVILY_API_KEY, free 1,000 searches/month; ~6 a day here).
+// Without the key, Gemini's own Google Search tool, which the free tier refuses on Gemini 3 (one 429, then news).
+async function tavily(env, query, max = 6) {
+  const res = await fetch("https://api.tavily.com/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.TAVILY_API_KEY}` },
+    body: JSON.stringify({ query, search_depth: "basic", max_results: max }),
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!res.ok) throw new Error(`Tavily HTTP ${res.status}`); // 4xx (bad key, credits used up) stops the run's searches
+  return ((await res.json()).results || []).map((r) => ({ url: String(r.url || ""), title: String(r.title || ""), text: String(r.content || "").slice(0, 700) }));
+}
+
+// One person (or a team: then their org's GNC work): is it real, and what do they actually work on?
+async function groundedResearch(env, c, models = MODELS_SMART) {
+  const team = !/\s/.test(String(c.name).trim()) || /\b(team|operations|engineering|recruiting)\b/i.test(c.name);
+  const ask = `A high-school student (rocket guidance, navigation & control) wants to write to ${team ? `the team at ${c.org}` : `${c.name}, ${c.title || "?"} at ${c.org}`}.
+What we have: ${String(c.bio || c.orgLine || "").slice(0, 400)}
+Return ONLY JSON:
+{"verified": true/false (${team ? "true if the company exists and is active" : "true only if the results show this person really exists AND works or worked at this org in a role like this"}),
+ "why": "if not verified: one short reason",
+ "role": "${team ? "what the company does" : "their current role, per the results"}",
+ "facts": ["2-3 specific, checkable things about ${team ? "the company's" : "THEIR own"} work (projects, papers, talks, launches, missions), with month/year"],
+ "gnc": "one line: how this touches guidance/navigation/control or propulsion, or \"\" if it doesn't"}
+Only what the results support; never guess.`;
+  let r, sources;
+  if (env.TAVILY_API_KEY) {
+    const web = await tavily(env, team ? `${c.org} guidance navigation control` : `"${c.name}" ${c.org}`);
+    if (!web.length) return { error: "no web results" };
+    r = parseJson(await gemini(env, [{ role: "user", parts: [{ text: `${ask}
+Each fact ends with the [number] of the result it comes from.
+
+Web results:
+${web.map((w, i) => `[${i + 1}] ${w.title} (${w.url})\n${w.text}`).join("\n\n")}` }] }], { json: true, models }));
+    r.facts = (Array.isArray(r.facts) ? r.facts : []).filter((f) => /\[\d+\]/.test(String(f))).map((f) => String(f).replace(/\s*\[\d+\]/g, "")); // a fact without its source is dropped
+    sources = web.length;
+  } else {
+    const found = [];
+    const text = await gemini(env, [{ role: "user", parts: [{ text: `Use Google Search. ${ask}` }] }], { models: ["gemini-flash-latest"], tools: [{ google_search: {} }], sources: found });
+    if (!found.length) return { error: "answered without searching" }; // no sources = not verified, use the news instead
+    r = parseJson(text);
+    sources = found.length;
+  }
+  return {
+    verified: r.verified !== false, why: String(r.why || "").slice(0, 160), role: String(r.role || "").slice(0, 160),
+    facts: (Array.isArray(r.facts) ? r.facts : []).slice(0, 3).map((f) => String(f).slice(0, 240)), gnc: String(r.gnc || "").slice(0, 200), sources,
+  };
+}
+
+// ---------- Tavily: every contact researched (kept 30 days), and new people found on the web ----------
+const webFresh = (c) => !!c.web?.at && c.web.at > addDaysISO(todayISO(), -30);
+
+// Stores what the research found. Someone it can't confirm is flagged (and, if not contacted yet, parked 30 days).
+async function saveWeb(env, id, g) {
+  const c = await getContact(env, id);
+  if (!c) return;
+  c.web = { at: todayISO(), verified: g.verified, why: g.why || "", role: g.role || "", facts: g.facts || [], gnc: g.gnc || "", sources: g.sources || 0 };
+  if (g.facts?.length) c.research = g.facts;
+  if (g.verified === false) {
+    c.flag = `Haneul couldn't confirm this person on the web (${g.why || "no match"}). Check them before writing.`.slice(0, 300);
+    if (c.stage === "research") c.snooze = addDaysISO(todayISO(), 30);
+    addLog(c, "Haneul's web search couldn't confirm them");
+  } else addLog(c, `Haneul checked them on the web (${(g.facts || []).length} facts)`);
+  await saveContact(env, c);
+}
+
+// 8 contacts per run (best fit first), then it queues itself until everyone has research from the last 30 days.
+// Stops on a Tavily refusal (credits) or a Gemini quota error, and picks up where it left off next time.
+export async function researchAll(env) {
+  if (!env.TAVILY_API_KEY) return { error: "no TAVILY_API_KEY" };
+  const left = (await listContacts(env)).filter((c) => c.stage !== "closed" && !webFresh(c)).sort((a, b) => (b.fit || 3) - (a.fit || 3));
+  let done = 0, stop = "";
+  for (const c of left.slice(0, 8)) {
+    const g = await groundedResearch(env, c, MODELS_LIGHT).catch((err) => ({ error: err.message }));
+    if (g.error && /HTTP \d{3}|overloaded/.test(g.error)) { stop = g.error.slice(0, 160); break; }
+    await saveWeb(env, c.id, g.error ? { verified: undefined, why: g.error } : g); // no results / unreadable: marked, not retried for 30 days
+    done++;
+    await new Promise((r) => setTimeout(r, 4000)); // the free Gemini tier allows ~15 calls a minute
+  }
+  const more = left.length - done;
+  await env.DB.put("outreach_research_all", JSON.stringify({ at: Date.now(), done, more, stop }), { expirationTtl: 86400 * 30 });
+  if (more > 0 && done && !stop) await env.BG_JOBS.send({ kind: "outreach_research_all" });
+  return { done, more, stop };
+}
+
+// Find `want` new mentors named in web results (space GNC / propulsion), add them, then research them.
+export async function discoverWeb(env, want = 10) {
+  if (!env.TAVILY_API_KEY) return { error: "no TAVILY_API_KEY" };
+  const known = new Set((await listContacts(env)).map((c) => String(c.name).toLowerCase()));
+  const people = [], queries = [];
+  for (const q of DISCOVER_TOPICS.flat().slice(0, 8)) { // 8 searches at most per run
+    if (people.length >= want) break;
+    const web = await tavily(env, q, 8).catch((err) => ({ error: err.message }));
+    if (web.error) { queries.push(`${q} (${web.error})`); break; }
+    queries.push(`${q} (${web.length})`);
+    if (!web.length) continue;
+    let list;
+    try {
+      const r = parseJson(await gemini(env, [{ role: "user", parts: [{ text: `Alex (11th grader in TKS; his focus is space tech: rocket guidance, navigation & control and propulsion; he built a fuel-optimal rocket-landing simulator) is looking for AEROSPACE mentors.
+From ONLY these web results, pick REAL PEOPLE who are NAMED in a result and would be a great mentor for him: engineers, researchers, professors,
+early-stage founders in GNC / propulsion / space who might answer a student. SKIP household names, billionaires and CEOs of big companies,
+politicians, celebrities, TKS staff, and anyone not named in the text. Never invent a name, role or company.
+Already tracked (skip): ${[...known].slice(0, 120).join(", ")}.
+Return JSON: [{"name": "Full Name", "org": "their company/lab", "title": "their role if stated", "why": "one line: why they fit Alex",
+"ask": "one specific question he could ask them", "skills": ["2-3 tags"], "fit": 1-5, "source": <number of the result>}]  ([] if none)
+
+${web.map((w, i) => `[${i + 1}] ${w.title} (${w.url})\n${w.text}`).join("\n\n")}` }] }], { json: true, models: MODELS_SMART }));
+      list = Array.isArray(r) ? r : r.people || [];
+    } catch (err) { queries.push(`gemini: ${err.message.slice(0, 80)}`); break; }
+    for (const x of list) {
+      const w = web[(Number(x?.source) || 0) - 1];
+      if (!w || !x.name || !x.org || String(x.name).trim().split(/\s+/).length < 2 || known.has(String(x.name).toLowerCase()) || (Number(x.fit) || 3) < 3) continue;
+      known.add(String(x.name).toLowerCase());
+      people.push({ ...x, url: w.url, snippet: w.text });
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  let added = 0;
+  for (const x of people.slice(0, want)) {
+    const id = slug(`${x.org} ${x.name}`);
+    if (await getContact(env, id)) continue;
+    await saveContact(env, addLog({
+      id, name: String(x.name).slice(0, 80), title: String(x.title || "").slice(0, 80), org: String(x.org).slice(0, 80), orgLine: "", growth: "",
+      skills: (x.skills || []).slice(0, 4).map((s) => String(s).slice(0, 40)), email: "", emailQuality: "none",
+      fit: Math.max(1, Math.min(5, Number(x.fit) || 3)), stage: "research", followUps: 0, lastContact: null,
+      notes: String(x.why || "").slice(0, 300), ask: String(x.ask || "").slice(0, 300), bio: `On the web: ${String(x.snippet || "").slice(0, 400)} (${x.url})`,
+      flag: "Found by Haneul on the web: check it's the right person before writing.", source: "web",
+      linkedin: /linkedin\.com\/in\//.test(x.url) ? x.url : "", meeting: "", log: [],
+    }, "Found by Haneul on the web"));
+    await env.FEED.prepare("INSERT OR IGNORE INTO outreach_updates (at, kind, org, title, url, source) VALUES (?, 'lead', ?, ?, ?, 'Haneul')")
+      .bind(Date.now(), String(x.org).slice(0, 80), `New mentor: ${x.name} (${x.org}): ${String(x.why || "").slice(0, 160)}`, `lead:${id}`).run();
+    added++;
+    if (hunterReady(env)) await hunterFind(env, id).catch((err) => console.error("hunter discover:", err.message));
+  }
+  await env.DB.put("outreach_discover_last", JSON.stringify({ at: Date.now(), queries, added, names: people.slice(0, want).map((p) => p.name) }), { expirationTtl: 86400 * 14 });
+  if (added) await env.BG_JOBS.send({ kind: "outreach_research_all" }); // verify the new people
+  return { added, names: people.slice(0, want).map((p) => p.name) };
 }
 
 // Alex sent a booking note / LinkedIn message himself: counts toward today's goal.
@@ -607,6 +784,7 @@ export async function outreachState(env) {
     hunter: hunterReady(env) ? (await hunterCredits(env).catch(() => null)) || { unknown: true } : null,
     work: await getWork(env),
     feeds: ((await env.DB.get("work_feeds", "json")) || []),
+    substack: ((await env.DB.get("substack_feed")) || "").replace(/\/feed$/, ""),
     gmail: gmailReady(env),
     overview: overviewText(contacts),
   };
@@ -641,6 +819,7 @@ export async function outreachContext(env) {
   const lines = [`TKS mentor outreach (Outreach tab in the app): ${overviewText(list.map((x) => ({ ...x.c, move: x.m })))}.`,
     `Today's outreach goal: ${t.done}/${t.goal} sent so far, ${t.ready} drafted messages waiting for him (you researched them and wrote the drafts).`];
   if (due.length) lines.push(`Due: ${due.map((x) => `${x.c.name || x.c.org} at ${x.c.org}: ${x.m.t}`).join("; ")}.`);
+  lines.push("Everyone past Research is also mirrored every hour to his Networking Tracker table in Notion (a Velocity goal); what he edits there (follow-up dates, notes) comes back to you.");
   if (replies.length) lines.push(`Waiting for Alex's answer: ${replies.map((x) => `${x.c.name || x.c.org} (${x.c.org})`).join(", ")}. Mention it if it fits; emails are only sent after he approves them in the app.`);
   return lines.join("\n");
 }
